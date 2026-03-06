@@ -1,0 +1,7 @@
+1
+00:00:00,200 --> 00:00:03,700
+You don't need to speak the language...
+
+2
+00:00:03,800 --> 00:00:08,200
+...to feel the pain.
