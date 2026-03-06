@@ -1,0 +1,13 @@
+{
+  "name": "interfaith-platform",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:api": "npm --workspace @interfaith/api run dev",
+    "dev:web": "npm --workspace @interfaith/web run dev"
+  }
+}
