@@ -14,9 +14,10 @@ const html = `<!doctype html>
       .card { border: 1px solid #ddd; border-radius: 10px; padding: 1rem; margin-top: 1rem; }
       code { background: #f4f4f4; padding: 2px 6px; border-radius: 4px; }
       label { display:block; margin-top: .5rem; font-size: .9rem; }
-      input, select, button { padding: .5rem; margin-top: .25rem; }
+      input, select, button, textarea { padding: .5rem; margin-top: .25rem; }
+      textarea { width: 100%; min-height: 70px; }
       .row { display:flex; gap:.75rem; flex-wrap: wrap; }
-      .result { background:#fafafa; border:1px solid #eee; padding:.75rem; border-radius:8px; margin-top:.5rem; }
+      .result { background:#fafafa; border:1px solid #eee; padding:.75rem; border-radius:8px; margin-top:.5rem; white-space: pre-wrap; }
       .muted { color:#666; font-size:.9rem; }
     </style>
   </head>
@@ -25,12 +26,23 @@ const html = `<!doctype html>
     <p class="muted">API target: <code>${apiUrl}</code></p>
 
     <div class="card">
-      <h3>Queue</h3>
+      <h3>Auth (stub)</h3>
       <div class="row">
         <div>
           <label>User ID</label>
           <input id="userId" value="demo-user" />
         </div>
+        <div style="align-self:flex-end;">
+          <button onclick="login()">Login</button>
+          <button onclick="me()">Who am I?</button>
+        </div>
+      </div>
+      <pre id="authOut" class="result">Not logged in.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Queue</h3>
+      <div class="row">
         <div>
           <label>Mode</label>
           <select id="mode">
@@ -49,6 +61,32 @@ const html = `<!doctype html>
         <button onclick="leaveQueue()">Leave queue</button>
       </div>
       <pre id="queueOut" class="result">No queue action yet.</pre>
+    </div>
+
+    <div class="card">
+      <h3>Moderation report</h3>
+      <div class="row">
+        <div>
+          <label>Category</label>
+          <select id="reportCategory">
+            <option value="harassment">harassment</option>
+            <option value="hate">hate</option>
+            <option value="misinformation">misinformation</option>
+            <option value="sexual-content">sexual-content</option>
+            <option value="other" selected>other</option>
+          </select>
+        </div>
+        <div>
+          <label>Target user (optional)</label>
+          <input id="targetUserId" placeholder="other-user" />
+        </div>
+      </div>
+      <label>Notes</label>
+      <textarea id="reportNotes" placeholder="What happened?"></textarea>
+      <div class="row" style="margin-top:.75rem;">
+        <button onclick="submitReport()">Submit report</button>
+      </div>
+      <pre id="reportOut" class="result">No report submitted.</pre>
     </div>
 
     <div class="card">
@@ -79,15 +117,30 @@ const html = `<!doctype html>
 
       async function jfetch(path, options = {}) {
         const res = await fetch(API + path, {
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           ...options
         });
         return res.json();
       }
 
+      function currentUserId() {
+        return document.getElementById('userId').value.trim() || 'demo-user';
+      }
+
+      async function login() {
+        const data = await jfetch('/auth/login', { method: 'POST', body: JSON.stringify({ userId: currentUserId() }) });
+        document.getElementById('authOut').textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function me() {
+        const data = await jfetch('/me');
+        document.getElementById('authOut').textContent = JSON.stringify(data, null, 2);
+      }
+
       function getQueuePayload() {
         return {
-          userId: document.getElementById('userId').value.trim() || 'demo-user',
+          userId: currentUserId(),
           modePreference: document.getElementById('mode').value,
           language: document.getElementById('language').value.trim() || 'en',
           intentTags: ['interfaith-dialogue']
@@ -100,14 +153,27 @@ const html = `<!doctype html>
       }
 
       async function queueStatus() {
-        const userId = encodeURIComponent(document.getElementById('userId').value.trim() || 'demo-user');
+        const userId = encodeURIComponent(currentUserId());
         const data = await jfetch('/queue/status?userId=' + userId);
         document.getElementById('queueOut').textContent = JSON.stringify(data, null, 2);
       }
 
       async function leaveQueue() {
-        const data = await jfetch('/queue/leave', { method: 'POST', body: JSON.stringify({ userId: document.getElementById('userId').value.trim() || 'demo-user' }) });
+        const data = await jfetch('/queue/leave', { method: 'POST', body: JSON.stringify({ userId: currentUserId() }) });
         document.getElementById('queueOut').textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function submitReport() {
+        const payload = {
+          reporterUserId: currentUserId(),
+          targetUserId: document.getElementById('targetUserId').value.trim() || null,
+          category: document.getElementById('reportCategory').value,
+          notes: document.getElementById('reportNotes').value.trim(),
+          sessionId: null
+        };
+
+        const data = await jfetch('/reports', { method: 'POST', body: JSON.stringify(payload) });
+        document.getElementById('reportOut').textContent = JSON.stringify(data, null, 2);
       }
 
       async function searchCitations() {

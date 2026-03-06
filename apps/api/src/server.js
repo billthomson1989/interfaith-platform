@@ -2,8 +2,11 @@ import http from "node:http";
 import crypto from "node:crypto";
 
 const port = Number(process.env.API_PORT || 4000);
+const usePostgres = process.env.USE_POSTGRES === "true";
 
 const queueByUser = new Map();
+const moderationReports = [];
+const sessions = new Map();
 
 const sampleCitations = [
   {
@@ -26,12 +29,52 @@ const sampleCitations = [
   }
 ];
 
-const sendJson = (res, statusCode, payload) => {
+let pgClient = null;
+
+const initPostgresIfEnabled = async () => {
+  if (!usePostgres) return;
+
+  try {
+    const { Client } = await import("pg");
+    pgClient = new Client({
+      connectionString: process.env.DATABASE_URL || "postgresql://interfaith:interfaith@localhost:5432/interfaith"
+    });
+    await pgClient.connect();
+    await pgClient.query(`
+      create table if not exists queue_entries (
+        user_id text primary key,
+        queue_id text not null,
+        mode text not null,
+        language text not null,
+        intent_tags jsonb not null,
+        queued_at timestamptz not null default now()
+      )
+    `);
+    await pgClient.query(`
+      create table if not exists moderation_reports (
+        id text primary key,
+        session_id text,
+        reporter_user_id text not null,
+        target_user_id text,
+        category text not null,
+        notes text,
+        created_at timestamptz not null default now()
+      )
+    `);
+    console.log("[api] postgres connected");
+  } catch (error) {
+    console.warn("[api] postgres init failed; falling back to in-memory", error.message);
+    pgClient = null;
+  }
+};
+
+const sendJson = (res, statusCode, payload, extraHeaders = {}) => {
   res.writeHead(statusCode, {
     "Content-Type": "application/json",
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Headers": "Content-Type",
+    ...extraHeaders
   });
   res.end(JSON.stringify(payload));
 };
@@ -47,6 +90,21 @@ const readBody = async (req) => {
   }
 };
 
+const parseCookies = (req) => {
+  const raw = req.headers.cookie || "";
+  return Object.fromEntries(
+    raw
+      .split(";")
+      .map((v) => v.trim())
+      .filter(Boolean)
+      .map((pair) => {
+        const idx = pair.indexOf("=");
+        if (idx === -1) return [pair, ""];
+        return [pair.slice(0, idx), decodeURIComponent(pair.slice(idx + 1))];
+      })
+  );
+};
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
@@ -58,6 +116,7 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, {
       ok: true,
       service: "interfaith-api",
+      persistence: pgClient ? "postgres" : "memory",
       timestamp: new Date().toISOString()
     });
   }
@@ -68,6 +127,32 @@ const server = http.createServer(async (req, res) => {
       next: "verify-email",
       message: "Signup stub ready"
     });
+  }
+
+  if (req.method === "POST" && url.pathname === "/auth/login") {
+    const body = await readBody(req);
+    const userId = (body.userId || "demo-user").toString();
+    const token = crypto.randomUUID();
+    sessions.set(token, { userId, createdAt: new Date().toISOString() });
+
+    return sendJson(
+      res,
+      200,
+      { ok: true, userId, sessionToken: token },
+      { "Set-Cookie": `interfaith_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400` }
+    );
+  }
+
+  if (req.method === "GET" && url.pathname === "/me") {
+    const cookies = parseCookies(req);
+    const token = cookies.interfaith_session;
+    const session = token ? sessions.get(token) : null;
+
+    if (!session) {
+      return sendJson(res, 401, { ok: false, error: "Not authenticated" });
+    }
+
+    return sendJson(res, 200, { ok: true, userId: session.userId, sessionCreatedAt: session.createdAt });
   }
 
   if (req.method === "POST" && url.pathname === "/queue/join") {
@@ -85,25 +170,44 @@ const server = http.createServer(async (req, res) => {
 
     queueByUser.set(userId, entry);
 
-    return sendJson(res, 200, {
-      ok: true,
-      ...entry
-    });
+    if (pgClient) {
+      await pgClient.query(
+        `insert into queue_entries(user_id, queue_id, mode, language, intent_tags, queued_at)
+         values($1,$2,$3,$4,$5,$6)
+         on conflict(user_id) do update set queue_id=excluded.queue_id, mode=excluded.mode, language=excluded.language, intent_tags=excluded.intent_tags, queued_at=excluded.queued_at`,
+        [entry.userId, entry.queueId, entry.mode, entry.language, JSON.stringify(entry.intentTags), entry.queuedAt]
+      );
+    }
+
+    return sendJson(res, 200, { ok: true, ...entry });
   }
 
   if (req.method === "GET" && url.pathname === "/queue/status") {
     const userId = (url.searchParams.get("userId") || "demo-user").toString();
-    const entry = queueByUser.get(userId);
 
+    if (pgClient) {
+      const result = await pgClient.query(`select * from queue_entries where user_id = $1`, [userId]);
+      if (result.rows.length) {
+        const row = result.rows[0];
+        return sendJson(res, 200, {
+          ok: true,
+          queued: true,
+          queueId: row.queue_id,
+          userId: row.user_id,
+          mode: row.mode,
+          language: row.language,
+          intentTags: row.intent_tags,
+          queuedAt: row.queued_at
+        });
+      }
+    }
+
+    const entry = queueByUser.get(userId);
     if (!entry) {
       return sendJson(res, 200, { ok: true, queued: false, userId });
     }
 
-    return sendJson(res, 200, {
-      ok: true,
-      queued: true,
-      ...entry
-    });
+    return sendJson(res, 200, { ok: true, queued: true, ...entry });
   }
 
   if (req.method === "POST" && url.pathname === "/queue/leave") {
@@ -111,11 +215,11 @@ const server = http.createServer(async (req, res) => {
     const userId = (body.userId || "demo-user").toString();
     const removed = queueByUser.delete(userId);
 
-    return sendJson(res, 200, {
-      ok: true,
-      removed,
-      userId
-    });
+    if (pgClient) {
+      await pgClient.query(`delete from queue_entries where user_id = $1`, [userId]);
+    }
+
+    return sendJson(res, 200, { ok: true, removed, userId });
   }
 
   if (req.method === "GET" && url.pathname === "/citation/search") {
@@ -131,9 +235,44 @@ const server = http.createServer(async (req, res) => {
     return sendJson(res, 200, { ok: true, count: results.length, results });
   }
 
+  if (req.method === "POST" && url.pathname === "/reports") {
+    const body = await readBody(req);
+    const report = {
+      id: crypto.randomUUID(),
+      sessionId: body.sessionId || null,
+      reporterUserId: (body.reporterUserId || "demo-user").toString(),
+      targetUserId: body.targetUserId || null,
+      category: body.category || "other",
+      notes: body.notes || "",
+      createdAt: new Date().toISOString()
+    };
+
+    moderationReports.push(report);
+
+    if (pgClient) {
+      await pgClient.query(
+        `insert into moderation_reports(id, session_id, reporter_user_id, target_user_id, category, notes, created_at)
+         values($1,$2,$3,$4,$5,$6,$7)`,
+        [report.id, report.sessionId, report.reporterUserId, report.targetUserId, report.category, report.notes, report.createdAt]
+      );
+    }
+
+    return sendJson(res, 201, { ok: true, report });
+  }
+
+  if (req.method === "GET" && url.pathname === "/reports") {
+    return sendJson(res, 200, {
+      ok: true,
+      count: moderationReports.length,
+      reports: moderationReports.slice(-50)
+    });
+  }
+
   return sendJson(res, 404, { ok: false, error: "Not found" });
 });
 
-server.listen(port, () => {
-  console.log(`[api] listening on http://localhost:${port}`);
+initPostgresIfEnabled().finally(() => {
+  server.listen(port, () => {
+    console.log(`[api] listening on http://localhost:${port}`);
+  });
 });
