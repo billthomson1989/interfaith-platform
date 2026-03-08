@@ -187,7 +187,7 @@ const html = `<!doctype html>
         }
 
         document.getElementById('citationOut').innerHTML = data.results
-          .map(r => `<div style="margin-bottom:.6rem;"><strong>${r.canonicalKey}</strong> <em>(${r.translation})</em><br/>${r.text}<br/><span class="muted">${r.tradition}</span></div>`)
+          .map(r => '<div style="margin-bottom:.6rem;"><strong>' + r.canonicalKey + '</strong> <em>(' + r.translation + ')</em><br/>' + r.text + '<br/><span class="muted">' + r.tradition + '</span></div>')
           .join('');
       }
     </script>

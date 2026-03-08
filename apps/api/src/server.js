@@ -68,10 +68,14 @@ const initPostgresIfEnabled = async () => {
   }
 };
 
-const sendJson = (res, statusCode, payload, extraHeaders = {}) => {
+const sendJson = (req, res, statusCode, payload, extraHeaders = {}) => {
+  const origin = req.headers.origin || "http://localhost:3000";
+
   res.writeHead(statusCode, {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Credentials": "true",
+    "Vary": "Origin",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
     ...extraHeaders
@@ -109,11 +113,11 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
   if (req.method === "OPTIONS") {
-    return sendJson(res, 200, { ok: true });
+    return sendJson(req, res, 200, { ok: true });
   }
 
   if (req.method === "GET" && url.pathname === "/health") {
-    return sendJson(res, 200, {
+    return sendJson(req, res, 200, {
       ok: true,
       service: "interfaith-api",
       persistence: pgClient ? "postgres" : "memory",
@@ -122,7 +126,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/auth/signup") {
-    return sendJson(res, 200, {
+    return sendJson(req, res, 200, {
       ok: true,
       next: "verify-email",
       message: "Signup stub ready"
@@ -136,6 +140,7 @@ const server = http.createServer(async (req, res) => {
     sessions.set(token, { userId, createdAt: new Date().toISOString() });
 
     return sendJson(
+      req,
       res,
       200,
       { ok: true, userId, sessionToken: token },
@@ -149,10 +154,10 @@ const server = http.createServer(async (req, res) => {
     const session = token ? sessions.get(token) : null;
 
     if (!session) {
-      return sendJson(res, 401, { ok: false, error: "Not authenticated" });
+      return sendJson(req, res, 401, { ok: false, error: "Not authenticated" });
     }
 
-    return sendJson(res, 200, { ok: true, userId: session.userId, sessionCreatedAt: session.createdAt });
+    return sendJson(req, res, 200, { ok: true, userId: session.userId, sessionCreatedAt: session.createdAt });
   }
 
   if (req.method === "POST" && url.pathname === "/queue/join") {
@@ -179,7 +184,7 @@ const server = http.createServer(async (req, res) => {
       );
     }
 
-    return sendJson(res, 200, { ok: true, ...entry });
+    return sendJson(req, res, 200, { ok: true, ...entry });
   }
 
   if (req.method === "GET" && url.pathname === "/queue/status") {
@@ -189,7 +194,7 @@ const server = http.createServer(async (req, res) => {
       const result = await pgClient.query(`select * from queue_entries where user_id = $1`, [userId]);
       if (result.rows.length) {
         const row = result.rows[0];
-        return sendJson(res, 200, {
+        return sendJson(req, res, 200, {
           ok: true,
           queued: true,
           queueId: row.queue_id,
@@ -204,10 +209,10 @@ const server = http.createServer(async (req, res) => {
 
     const entry = queueByUser.get(userId);
     if (!entry) {
-      return sendJson(res, 200, { ok: true, queued: false, userId });
+      return sendJson(req, res, 200, { ok: true, queued: false, userId });
     }
 
-    return sendJson(res, 200, { ok: true, queued: true, ...entry });
+    return sendJson(req, res, 200, { ok: true, queued: true, ...entry });
   }
 
   if (req.method === "POST" && url.pathname === "/queue/leave") {
@@ -219,7 +224,7 @@ const server = http.createServer(async (req, res) => {
       await pgClient.query(`delete from queue_entries where user_id = $1`, [userId]);
     }
 
-    return sendJson(res, 200, { ok: true, removed, userId });
+    return sendJson(req, res, 200, { ok: true, removed, userId });
   }
 
   if (req.method === "GET" && url.pathname === "/citation/search") {
@@ -232,7 +237,7 @@ const server = http.createServer(async (req, res) => {
       return textMatch && traditionMatch;
     });
 
-    return sendJson(res, 200, { ok: true, count: results.length, results });
+    return sendJson(req, res, 200, { ok: true, count: results.length, results });
   }
 
   if (req.method === "POST" && url.pathname === "/reports") {
@@ -257,18 +262,18 @@ const server = http.createServer(async (req, res) => {
       );
     }
 
-    return sendJson(res, 201, { ok: true, report });
+    return sendJson(req, res, 201, { ok: true, report });
   }
 
   if (req.method === "GET" && url.pathname === "/reports") {
-    return sendJson(res, 200, {
+    return sendJson(req, res, 200, {
       ok: true,
       count: moderationReports.length,
       reports: moderationReports.slice(-50)
     });
   }
 
-  return sendJson(res, 404, { ok: false, error: "Not found" });
+  return sendJson(req, res, 404, { ok: false, error: "Not found" });
 });
 
 initPostgresIfEnabled().finally(() => {
