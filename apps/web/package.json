@@ -5,6 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "node src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "smoke:e2e": "node scripts/smoke-e2e.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.54.2"
   }
 }
