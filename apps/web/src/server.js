@@ -187,7 +187,13 @@ const html = `<!doctype html>
         }
 
         document.getElementById('citationOut').innerHTML = data.results
-          .map(r => '<div style="margin-bottom:.6rem;"><strong>' + r.canonicalKey + '</strong> <em>(' + r.translation + ')</em><br/>' + r.text + '<br/><span class="muted">' + r.tradition + '</span></div>')
+          .map((r) => {
+            const label = r.reference || r.canonical_key || r.canonicalKey || 'Citation';
+            const translation = r.translation || 'Source';
+            const body = r.text || '';
+            const meta = [r.tradition, r.source].filter(Boolean).join(' • ');
+            return '<div style="margin-bottom:.6rem;"><strong>' + label + '</strong> <em>(' + translation + ')</em><br/>' + body + '<br/><span class="muted">' + meta + '</span></div>';
+          })
           .join('');
       }
     </script>

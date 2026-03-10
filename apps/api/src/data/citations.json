@@ -1,0 +1,68 @@
+[
+  {
+    "id": "quran-2-256-en-sahih",
+    "tradition": "islam",
+    "reference": "Qur'an 2:256",
+    "canonical_key": "QURAN 2:256",
+    "text": "There is no compulsion in religion.",
+    "translation": "Sahih International",
+    "source": "Qur'an",
+    "language": "en",
+    "tags": ["freedom", "religion", "conscience"]
+  },
+  {
+    "id": "quran-5-32-en-sahih",
+    "tradition": "islam",
+    "reference": "Qur'an 5:32",
+    "canonical_key": "QURAN 5:32",
+    "text": "Whoever saves one [life] - it is as if he had saved mankind entirely.",
+    "translation": "Sahih International",
+    "source": "Qur'an",
+    "language": "en",
+    "tags": ["life", "ethics", "peace"]
+  },
+  {
+    "id": "matthew-5-9-niv",
+    "tradition": "christianity",
+    "reference": "Matthew 5:9",
+    "canonical_key": "MATTHEW 5:9",
+    "text": "Blessed are the peacemakers, for they will be called children of God.",
+    "translation": "NIV",
+    "source": "Bible",
+    "language": "en",
+    "tags": ["peace", "beatitudes"]
+  },
+  {
+    "id": "romans-12-18-niv",
+    "tradition": "christianity",
+    "reference": "Romans 12:18",
+    "canonical_key": "ROMANS 12:18",
+    "text": "If it is possible, as far as it depends on you, live at peace with everyone.",
+    "translation": "NIV",
+    "source": "Bible",
+    "language": "en",
+    "tags": ["peace", "community"]
+  },
+  {
+    "id": "psalms-34-14-jps",
+    "tradition": "judaism",
+    "reference": "Psalms 34:14",
+    "canonical_key": "PSALMS 34:14",
+    "text": "Turn from evil and do good; seek peace and pursue it.",
+    "translation": "JPS",
+    "source": "Tanakh",
+    "language": "en",
+    "tags": ["peace", "ethics"]
+  },
+  {
+    "id": "leviticus-19-18-jps",
+    "tradition": "judaism",
+    "reference": "Leviticus 19:18",
+    "canonical_key": "LEVITICUS 19:18",
+    "text": "You shall love your neighbor as yourself.",
+    "translation": "JPS",
+    "source": "Tanakh",
+    "language": "en",
+    "tags": ["ethics", "neighbor", "community"]
+  }
+]

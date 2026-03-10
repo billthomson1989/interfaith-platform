@@ -112,9 +112,13 @@ async function main() {
   const report = await waitForJson(page.locator("#reportOut"));
   assert.equal(report.ok, true);
 
+  await page.locator("#citationQ").fill("matthew");
+  await page.locator("#tradition").selectOption("christianity");
   await page.getByRole("button", { name: "Search" }).click();
   const citationText = await page.locator("#citationOut").innerText();
   assert.ok(citationText.length > 0);
+  assert.ok(!citationText.includes("undefined"));
+  assert.ok(!citationText.includes("Citation (Source)"));
 
   await browser.close();
   console.log("✅ Frontend smoke e2e passed");

@@ -1,35 +1,65 @@
 import http from "node:http";
 import crypto from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 const port = Number(process.env.API_PORT || 4000);
 const usePostgres = process.env.USE_POSTGRES === "true";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const citationsPath = path.join(__dirname, "data", "citations.json");
 
 const queueByUser = new Map();
 const moderationReports = [];
 const sessions = new Map();
 
-const sampleCitations = [
-  {
-    tradition: "islam",
-    canonicalKey: "QURAN 2:256",
-    text: "There is no compulsion in religion.",
-    translation: "Sahih International"
-  },
-  {
-    tradition: "christianity",
-    canonicalKey: "MATTHEW 5:9",
-    text: "Blessed are the peacemakers, for they shall be called children of God.",
-    translation: "NIV"
-  },
-  {
-    tradition: "judaism",
-    canonicalKey: "PSALMS 34:14",
-    text: "Turn from evil and do good; seek peace and pursue it.",
-    translation: "JPS"
-  }
-];
-
 let pgClient = null;
+
+const normalizeCitation = (raw) => {
+  if (!raw || typeof raw !== "object") return null;
+
+  const reference = (raw.reference || "").toString().trim();
+  const canonicalKey = (raw.canonical_key || raw.canonicalKey || "").toString().trim();
+  const text = (raw.text || "").toString().trim();
+
+  if (!reference || !canonicalKey || !text) return null;
+
+  return {
+    id: (raw.id || crypto.randomUUID()).toString(),
+    tradition: (raw.tradition || "unknown").toString().toLowerCase(),
+    reference,
+    canonical_key: canonicalKey,
+    text,
+    translation: (raw.translation || "Unknown").toString(),
+    source: (raw.source || "Unknown").toString(),
+    language: (raw.language || "en").toString().toLowerCase(),
+    tags: Array.isArray(raw.tags) ? raw.tags.map((tag) => String(tag).toLowerCase()) : []
+  };
+};
+
+const loadCitations = () => {
+  try {
+    const raw = fs.readFileSync(citationsPath, "utf8");
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) throw new Error("citations.json must be an array");
+
+    const normalized = parsed.map(normalizeCitation).filter(Boolean);
+
+    if (!normalized.length) {
+      throw new Error("No valid citations found after normalization");
+    }
+
+    console.log(`[api] loaded ${normalized.length} citations from ${citationsPath}`);
+    return normalized;
+  } catch (error) {
+    console.warn("[api] citation load failed, falling back to empty set:", error.message);
+    return [];
+  }
+};
+
+const citations = loadCitations();
 
 const initPostgresIfEnabled = async () => {
   if (!usePostgres) return;
@@ -121,6 +151,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       service: "interfaith-api",
       persistence: pgClient ? "postgres" : "memory",
+      citationSource: citations.length ? "dataset" : "empty",
       timestamp: new Date().toISOString()
     });
   }
@@ -231,13 +262,32 @@ const server = http.createServer(async (req, res) => {
     const q = (url.searchParams.get("q") || "").toLowerCase().trim();
     const tradition = (url.searchParams.get("tradition") || "").toLowerCase().trim();
 
-    const results = sampleCitations.filter((item) => {
-      const textMatch = !q || item.text.toLowerCase().includes(q) || item.canonicalKey.toLowerCase().includes(q);
+    const results = citations.filter((item) => {
+      const haystack = [
+        item.reference,
+        item.canonical_key,
+        item.text,
+        item.translation,
+        item.source,
+        item.tradition,
+        ...(item.tags || [])
+      ]
+        .join(" ")
+        .toLowerCase();
+
+      const textMatch = !q || haystack.includes(q);
       const traditionMatch = !tradition || item.tradition === tradition;
       return textMatch && traditionMatch;
     });
 
-    return sendJson(req, res, 200, { ok: true, count: results.length, results });
+    return sendJson(req, res, 200, {
+      ok: true,
+      count: results.length,
+      results: results.map((item) => ({
+        ...item,
+        canonicalKey: item.canonical_key
+      }))
+    });
   }
 
   if (req.method === "POST" && url.pathname === "/reports") {
