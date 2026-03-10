@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Interfaith Platform — Sprint 1</title>
+  <link rel="stylesheet" href="/assets/css/app.css?v=phase2a" />
+</head>
+<body>
+  <h1>Interfaith Dialogue Platform</h1>
+  <p class="muted">Sprint 1 frontend shell deployed.</p>
+
+  <div class="card">
+    <h3>Auth (stub)</h3>
+    <div class="row">
+      <div>
+        <label>User ID<br /><input id="userId" value="demo-user" /></label>
+      </div>
+      <button id="btnLogin">Login</button>
+      <button id="btnMe">Who am I?</button>
+    </div>
+    <pre id="authOut">Not logged in.</pre>
+  </div>
+
+  <div class="card">
+    <h3>Queue</h3>
+    <div class="row">
+      <div>
+        <label>Mode<br />
+          <select id="mode">
+            <option value="voice_only">voice_only</option>
+            <option value="voice_then_video">voice_then_video</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <label>Language<br /><input id="lang" value="en" /></label>
+      </div>
+    </div>
+    <div class="row">
+      <button id="btnJoinQueue">Join queue</button>
+      <button id="btnQueueStatus">Check status</button>
+      <button id="btnLeaveQueue">Leave queue</button>
+    </div>
+    <pre id="queueOut">No queue action yet.</pre>
+  </div>
+
+  <div class="card">
+    <h3>Moderation report</h3>
+    <div class="row">
+      <div>
+        <label>Category<br />
+          <select id="category">
+            <option value="harassment">harassment</option>
+            <option value="hate">hate</option>
+            <option value="misinformation">misinformation</option>
+            <option value="sexual-content">sexual-content</option>
+            <option value="other" selected>other</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <label>Target user (optional)<br /><input id="target" placeholder="other-user" /></label>
+      </div>
+    </div>
+    <label>Notes<br /><textarea id="notes"></textarea></label>
+    <button id="btnReport">Submit report</button>
+    <pre id="reportOut">No report submitted.</pre>
+  </div>
+
+  <div class="card">
+    <h3>Citation search</h3>
+    <div class="row">
+      <div>
+        <label>Search query<br /><input id="q" value="peace" /></label>
+      </div>
+      <div>
+        <label>Tradition<br />
+          <select id="trad">
+            <option value="">All</option>
+            <option value="islam">Islam</option>
+            <option value="christianity">Christianity</option>
+            <option value="judaism">Judaism</option>
+          </select>
+        </label>
+      </div>
+      <button id="btnSearchCitations">Search</button>
+    </div>
+    <div id="citationOut"><pre>No search yet.</pre></div>
+  </div>
+
+  <script src="/assets/js/app.js?v=phase2a"></script>
+</body>
+</html>
