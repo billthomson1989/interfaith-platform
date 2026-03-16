@@ -64,6 +64,15 @@ const html = `<!doctype html>
     </div>
 
     <div class="card">
+      <h3>Session</h3>
+      <div class="row" style="margin-top:.25rem;">
+        <button onclick="sessionStatus()">Session status</button>
+        <button onclick="endSession()">End session</button>
+      </div>
+      <pre id="sessionOut" class="result">No session action yet.</pre>
+    </div>
+
+    <div class="card">
       <h3>Moderation report</h3>
       <div class="row">
         <div>
@@ -90,7 +99,7 @@ const html = `<!doctype html>
     </div>
 
     <div class="card">
-      <h3>Citation search (mock)</h3>
+      <h3>Citation search</h3>
       <div class="row">
         <div>
           <label>Search query</label>
@@ -161,6 +170,17 @@ const html = `<!doctype html>
       async function leaveQueue() {
         const data = await jfetch('/queue/leave', { method: 'POST', body: JSON.stringify({ userId: currentUserId() }) });
         document.getElementById('queueOut').textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function sessionStatus() {
+        const userId = encodeURIComponent(currentUserId());
+        const data = await jfetch('/session/status?userId=' + userId);
+        document.getElementById('sessionOut').textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function endSession() {
+        const data = await jfetch('/session/end', { method: 'POST', body: JSON.stringify({ userId: currentUserId(), reason: 'ui_end' }) });
+        document.getElementById('sessionOut').textContent = JSON.stringify(data, null, 2);
       }
 
       async function submitReport() {
