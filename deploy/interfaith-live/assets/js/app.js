@@ -1,8 +1,9 @@
-const API_BASE = "https://api.interfaith.billthomson.elementfx.com/api";
-const API_FALLBACK = "https://187.77.99.197.sslip.io/api";
+const runtime = globalThis.__INTERFAITH_RUNTIME__ || {};
+const API_BASE = runtime.apiBase || "https://api.interfaith.billthomson.elementfx.com/api";
+const API_FALLBACK = runtime.apiFallback || "";
 
 async function jf(path, opts = {}) {
-  const bases = [API_BASE, API_FALLBACK];
+  const bases = [API_BASE, API_FALLBACK].filter(Boolean);
   let lastErr;
 
   for (const base of bases) {
@@ -54,6 +55,16 @@ async function leaveQueue() {
   document.getElementById("queueOut").textContent = JSON.stringify(d, null, 2);
 }
 
+async function sessionStatus() {
+  const d = await jf("/session/status?userId=" + encodeURIComponent(uid()));
+  document.getElementById("sessionOut").textContent = JSON.stringify(d, null, 2);
+}
+
+async function endSession() {
+  const d = await jf("/session/end", { method: "POST", body: JSON.stringify({ userId: uid(), reason: "ui_end" }) });
+  document.getElementById("sessionOut").textContent = JSON.stringify(d, null, 2);
+}
+
 async function reportIt() {
   const payload = {
     reporterUserId: uid(),
@@ -92,5 +103,7 @@ document.getElementById("btnMe").addEventListener("click", whoami);
 document.getElementById("btnJoinQueue").addEventListener("click", joinQueue);
 document.getElementById("btnQueueStatus").addEventListener("click", queueStatus);
 document.getElementById("btnLeaveQueue").addEventListener("click", leaveQueue);
+document.getElementById("btnSessionStatus").addEventListener("click", sessionStatus);
+document.getElementById("btnEndSession").addEventListener("click", endSession);
 document.getElementById("btnReport").addEventListener("click", reportIt);
 document.getElementById("btnSearchCitations").addEventListener("click", searchCitations);
