@@ -73,6 +73,7 @@ async function main() {
   process.env.API_PORT = String(API_PORT);
   process.env.APP_PORT = String(WEB_PORT);
   process.env.API_BASE_URL = API_BASE_URL;
+  process.env.CORS_ORIGINS = `${WEB_BASE_URL},http://localhost:${WEB_PORT}`;
 
   await import("../../api/src/server.js");
   await import("../src/server.js");
@@ -95,16 +96,31 @@ async function main() {
   assert.equal(authMe.ok, true);
 
   await page.getByRole("button", { name: "Join queue" }).click();
-  const joined = await waitForJson(page.locator("#queueOut"), (j) => Boolean(j.queueId));
-  assert.equal(joined.ok, true);
+  const joinedUser1 = await waitForJson(page.locator("#queueOut"), (j) => j.ok === true);
+  assert.equal(joinedUser1.matched, false);
+  assert.equal(joinedUser1.queued, true);
 
-  await page.getByRole("button", { name: "Check status" }).click();
-  const status = await waitForJson(page.locator("#queueOut"), (j) => j.queued === true);
-  assert.equal(status.queued, true);
+  await page.locator("#userId").fill("demo-user-2");
+  await page.getByRole("button", { name: "Join queue" }).click();
+  const joinedUser2 = await waitForJson(page.locator("#queueOut"), (j) => j.matched === true && Boolean(j.session?.sessionId));
+  assert.equal(joinedUser2.ok, true);
 
-  await page.getByRole("button", { name: "Leave queue" }).click();
-  const left = await waitForJson(page.locator("#queueOut"), (j) => typeof j.removed === "boolean");
-  assert.equal(left.removed, true);
+  await page.getByRole("button", { name: "Session status" }).click();
+  const user2Session = await waitForJson(page.locator("#sessionOut"), (j) => j.active === true);
+  assert.equal(user2Session.session.state, "active");
+
+  await page.locator("#userId").fill("demo-user");
+  await page.getByRole("button", { name: "Session status" }).click();
+  const user1Session = await waitForJson(page.locator("#sessionOut"), (j) => j.active === true);
+  assert.equal(user1Session.session.state, "active");
+
+  await page.getByRole("button", { name: "End session" }).click();
+  const ended = await waitForJson(page.locator("#sessionOut"), (j) => j.ended === true);
+  assert.equal(ended.session.state, "ended");
+
+  await page.getByRole("button", { name: "Session status" }).click();
+  const inactive = await waitForJson(page.locator("#sessionOut"), (j) => j.active === false);
+  assert.equal(inactive.active, false);
 
   await page.locator("#targetUserId").fill("other-user");
   await page.locator("#reportNotes").fill("smoke test");

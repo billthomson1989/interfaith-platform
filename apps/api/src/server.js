@@ -7,13 +7,19 @@ import { fileURLToPath } from "node:url";
 const port = Number(process.env.API_PORT || 4000);
 const usePostgres = process.env.USE_POSTGRES === "true";
 
+const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:3000,http://127.0.0.1:3000")
+  .split(",")
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const citationsPath = path.join(__dirname, "data", "citations.json");
 
 const queueByUser = new Map();
 const moderationReports = [];
-const sessions = new Map();
+const authSessions = new Map();
+const dialogueSessions = new Map();
 
 let pgClient = null;
 
@@ -46,10 +52,7 @@ const loadCitations = () => {
     if (!Array.isArray(parsed)) throw new Error("citations.json must be an array");
 
     const normalized = parsed.map(normalizeCitation).filter(Boolean);
-
-    if (!normalized.length) {
-      throw new Error("No valid citations found after normalization");
-    }
+    if (!normalized.length) throw new Error("No valid citations found after normalization");
 
     console.log(`[api] loaded ${normalized.length} citations from ${citationsPath}`);
     return normalized;
@@ -60,6 +63,47 @@ const loadCitations = () => {
 };
 
 const citations = loadCitations();
+
+const canMatch = (a, b) => a.language === b.language && a.mode === b.mode;
+
+const tryMatchForUser = (newEntry) => {
+  for (const candidate of queueByUser.values()) {
+    if (candidate.userId === newEntry.userId) continue;
+    if (!canMatch(newEntry, candidate)) continue;
+
+    const sessionId = crypto.randomUUID();
+    const now = new Date().toISOString();
+    const participants = [newEntry.userId, candidate.userId].sort();
+
+    const session = {
+      sessionId,
+      state: "active",
+      mode: newEntry.mode,
+      language: newEntry.language,
+      participants,
+      matchedAt: now,
+      startedAt: now,
+      endedAt: null,
+      endedReason: null
+    };
+
+    dialogueSessions.set(sessionId, session);
+    queueByUser.delete(newEntry.userId);
+    queueByUser.delete(candidate.userId);
+    return session;
+  }
+
+  return null;
+};
+
+const findSessionByUser = (userId) => {
+  for (const session of dialogueSessions.values()) {
+    if (session.participants.includes(userId) && session.state !== "ended") {
+      return session;
+    }
+  }
+  return null;
+};
 
 const initPostgresIfEnabled = async () => {
   if (!usePostgres) return;
@@ -91,6 +135,19 @@ const initPostgresIfEnabled = async () => {
         created_at timestamptz not null default now()
       )
     `);
+    await pgClient.query(`
+      create table if not exists dialogue_sessions (
+        session_id text primary key,
+        state text not null,
+        mode text not null,
+        language text not null,
+        participants jsonb not null,
+        matched_at timestamptz not null,
+        started_at timestamptz,
+        ended_at timestamptz,
+        ended_reason text
+      )
+    `);
     console.log("[api] postgres connected");
   } catch (error) {
     console.warn("[api] postgres init failed; falling back to in-memory", error.message);
@@ -98,16 +155,30 @@ const initPostgresIfEnabled = async () => {
   }
 };
 
-const sendJson = (req, res, statusCode, payload, extraHeaders = {}) => {
-  const origin = req.headers.origin || "http://localhost:3000";
+const resolveCorsOrigin = (req) => {
+  const origin = req.headers.origin;
+  if (!origin) return allowedOrigins[0] || "http://localhost:3000";
+  if (allowedOrigins.includes(origin)) return origin;
+  return null;
+};
 
-  res.writeHead(statusCode, {
+const sendJson = (req, res, statusCode, payload, extraHeaders = {}) => {
+  const corsOrigin = resolveCorsOrigin(req);
+
+  const baseHeaders = {
     "Content-Type": "application/json",
-    "Access-Control-Allow-Origin": origin,
     "Access-Control-Allow-Credentials": "true",
     "Vary": "Origin",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type",
+    "Access-Control-Allow-Headers": "Content-Type"
+  };
+
+  if (corsOrigin) {
+    baseHeaders["Access-Control-Allow-Origin"] = corsOrigin;
+  }
+
+  res.writeHead(statusCode, {
+    ...baseHeaders,
     ...extraHeaders
   });
   res.end(JSON.stringify(payload));
@@ -152,6 +223,8 @@ const server = http.createServer(async (req, res) => {
       service: "interfaith-api",
       persistence: pgClient ? "postgres" : "memory",
       citationSource: citations.length ? "dataset" : "empty",
+      activeSessions: [...dialogueSessions.values()].filter((s) => s.state !== "ended").length,
+      queueDepth: queueByUser.size,
       timestamp: new Date().toISOString()
     });
   }
@@ -168,7 +241,7 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const userId = (body.userId || "demo-user").toString();
     const token = crypto.randomUUID();
-    sessions.set(token, { userId, createdAt: new Date().toISOString() });
+    authSessions.set(token, { userId, createdAt: new Date().toISOString() });
 
     return sendJson(
       req,
@@ -182,7 +255,7 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "GET" && url.pathname === "/me") {
     const cookies = parseCookies(req);
     const token = cookies.interfaith_session;
-    const session = token ? sessions.get(token) : null;
+    const session = token ? authSessions.get(token) : null;
 
     if (!session) {
       return sendJson(req, res, 401, { ok: false, error: "Not authenticated" });
@@ -194,6 +267,11 @@ const server = http.createServer(async (req, res) => {
   if (req.method === "POST" && url.pathname === "/queue/join") {
     const body = await readBody(req);
     const userId = (body.userId || "demo-user").toString();
+
+    const existingSession = findSessionByUser(userId);
+    if (existingSession) {
+      return sendJson(req, res, 200, { ok: true, alreadyMatched: true, session: existingSession });
+    }
 
     const entry = {
       queueId: crypto.randomUUID(),
@@ -215,35 +293,55 @@ const server = http.createServer(async (req, res) => {
       );
     }
 
-    return sendJson(req, res, 200, { ok: true, ...entry });
+    const matchedSession = tryMatchForUser(entry);
+    if (matchedSession) {
+      if (pgClient) {
+        await pgClient.query(
+          `insert into dialogue_sessions(session_id, state, mode, language, participants, matched_at, started_at)
+           values($1,$2,$3,$4,$5,$6,$7)`,
+          [
+            matchedSession.sessionId,
+            matchedSession.state,
+            matchedSession.mode,
+            matchedSession.language,
+            JSON.stringify(matchedSession.participants),
+            matchedSession.matchedAt,
+            matchedSession.startedAt
+          ]
+        );
+        await pgClient.query(`delete from queue_entries where user_id = any($1)`, [matchedSession.participants]);
+      }
+
+      return sendJson(req, res, 200, {
+        ok: true,
+        matched: true,
+        queued: false,
+        session: matchedSession
+      });
+    }
+
+    return sendJson(req, res, 200, { ok: true, matched: false, queued: true, ...entry });
   }
 
   if (req.method === "GET" && url.pathname === "/queue/status") {
     const userId = (url.searchParams.get("userId") || "demo-user").toString();
+    const activeSession = findSessionByUser(userId);
 
-    if (pgClient) {
-      const result = await pgClient.query(`select * from queue_entries where user_id = $1`, [userId]);
-      if (result.rows.length) {
-        const row = result.rows[0];
-        return sendJson(req, res, 200, {
-          ok: true,
-          queued: true,
-          queueId: row.queue_id,
-          userId: row.user_id,
-          mode: row.mode,
-          language: row.language,
-          intentTags: row.intent_tags,
-          queuedAt: row.queued_at
-        });
-      }
+    if (activeSession) {
+      return sendJson(req, res, 200, {
+        ok: true,
+        queued: false,
+        matched: true,
+        session: activeSession
+      });
     }
 
     const entry = queueByUser.get(userId);
     if (!entry) {
-      return sendJson(req, res, 200, { ok: true, queued: false, userId });
+      return sendJson(req, res, 200, { ok: true, queued: false, matched: false, userId });
     }
 
-    return sendJson(req, res, 200, { ok: true, queued: true, ...entry });
+    return sendJson(req, res, 200, { ok: true, queued: true, matched: false, ...entry });
   }
 
   if (req.method === "POST" && url.pathname === "/queue/leave") {
@@ -256,6 +354,46 @@ const server = http.createServer(async (req, res) => {
     }
 
     return sendJson(req, res, 200, { ok: true, removed, userId });
+  }
+
+  if (req.method === "GET" && url.pathname === "/session/status") {
+    const userId = (url.searchParams.get("userId") || "demo-user").toString();
+
+    const session = findSessionByUser(userId);
+    if (!session) {
+      return sendJson(req, res, 200, { ok: true, active: false, userId });
+    }
+
+    return sendJson(req, res, 200, {
+      ok: true,
+      active: true,
+      session,
+      partnerUserId: session.participants.find((id) => id !== userId) || null
+    });
+  }
+
+  if (req.method === "POST" && url.pathname === "/session/end") {
+    const body = await readBody(req);
+    const userId = (body.userId || "demo-user").toString();
+    const reason = (body.reason || "user_ended").toString();
+    const session = findSessionByUser(userId);
+
+    if (!session) {
+      return sendJson(req, res, 404, { ok: false, error: "No active session for user" });
+    }
+
+    session.state = "ended";
+    session.endedAt = new Date().toISOString();
+    session.endedReason = reason;
+
+    if (pgClient) {
+      await pgClient.query(
+        `update dialogue_sessions set state = $2, ended_at = $3, ended_reason = $4 where session_id = $1`,
+        [session.sessionId, session.state, session.endedAt, session.endedReason]
+      );
+    }
+
+    return sendJson(req, res, 200, { ok: true, ended: true, session });
   }
 
   if (req.method === "GET" && url.pathname === "/citation/search") {
