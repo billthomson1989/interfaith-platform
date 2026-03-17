@@ -100,6 +100,7 @@ const html = `<!doctype html>
 
     <div class="card">
       <h3>Moderation admin</h3>
+      <p class="muted">Admin login required. Use an admin user (default: <code>demo-admin</code> or <code>ops</code>).</p>
       <div class="row">
         <div>
           <label>Status filter</label>

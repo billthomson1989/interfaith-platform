@@ -7,6 +7,7 @@ const app = express();
 const PORT = process.env.PORT || 8787;
 const BASE = '/api';
 const isProd = (process.env.NODE_ENV || 'development') === 'production';
+const adminUserIds = new Set((process.env.ADMIN_USER_IDS || 'demo-admin,ops').split(',').map((s) => s.trim()).filter(Boolean));
 
 app.use(express.json());
 app.use(morgan('tiny'));
@@ -63,6 +64,21 @@ const cookieSessionValue = (token) => {
   const parts = [`interfaith_session=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=86400'];
   if (isProd) parts.push('Secure');
   return parts.join('; ');
+};
+
+const requireAdminSession = (req, res) => {
+  const cookies = parseCookies(req);
+  const token = cookies.interfaith_session;
+  const session = token ? authSessions.get(token) : null;
+  if (!session) {
+    res.status(401).json({ ok: false, error: 'Admin auth required' });
+    return null;
+  }
+  if (!adminUserIds.has(session.userId)) {
+    res.status(403).json({ ok: false, error: 'Admin role required', userId: session.userId });
+    return null;
+  }
+  return session;
 };
 
 function rankCitation(item, q) {
@@ -267,6 +283,9 @@ app.post(route('/reports'), (req, res) => {
 });
 
 app.get(route('/reports'), (req, res) => {
+  const admin = requireAdminSession(req, res);
+  if (!admin) return;
+
   const status = String(req.query.status || '').toLowerCase().trim();
   const validStates = new Set(['new', 'triaged', 'actioned', 'resolved']);
   const filtered = !status || !validStates.has(status) ? reports : reports.filter((r) => (r.status || 'new') === status);
@@ -274,6 +293,9 @@ app.get(route('/reports'), (req, res) => {
 });
 
 app.post(route('/reports/status'), (req, res) => {
+  const admin = requireAdminSession(req, res);
+  if (!admin) return;
+
   const body = req.body || {};
   const reportId = String(body.reportId || '');
   const status = String(body.status || '').toLowerCase();
@@ -286,7 +308,7 @@ app.post(route('/reports/status'), (req, res) => {
 
   report.status = status;
   report.reviewerNote = String(body.reviewerNote || '') || null;
-  report.reviewedBy = String(body.reviewedBy || 'moderator');
+  report.reviewedBy = String(body.reviewedBy || admin.userId || 'moderator');
   report.reviewedAt = new Date().toISOString();
 
   res.json({ ok: true, report });

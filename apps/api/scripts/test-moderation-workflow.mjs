@@ -35,6 +35,14 @@ async function main() {
   try {
     await waitForHealth(`${API_BASE_URL}/health`);
 
+    const adminLoginRes = await fetch(`${API_BASE_URL}/auth/login`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "demo-admin" })
+    });
+    assert.equal(adminLoginRes.status, 200);
+    const adminCookie = (adminLoginRes.headers.get("set-cookie") || "").split(";")[0];
+
     const createdRes = await fetch(`${API_BASE_URL}/reports`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -46,14 +54,17 @@ async function main() {
 
     const updateRes = await fetch(`${API_BASE_URL}/reports/status`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", cookie: adminCookie },
       body: JSON.stringify({ reportId: created.report.id, status: "triaged", reviewerNote: "checked", reviewedBy: "ops" })
     });
     const updated = await updateRes.json();
     assert.equal(updateRes.status, 200);
     assert.equal(updated.report.status, "triaged");
 
-    const filteredRes = await fetch(`${API_BASE_URL}/reports?status=triaged`);
+    const deniedRes = await fetch(`${API_BASE_URL}/reports?status=triaged`);
+    assert.equal(deniedRes.status, 401);
+
+    const filteredRes = await fetch(`${API_BASE_URL}/reports?status=triaged`, { headers: { cookie: adminCookie } });
     const filtered = await filteredRes.json();
     assert.equal(filteredRes.status, 200);
     assert.ok(filtered.reports.some((r) => r.id === created.report.id));

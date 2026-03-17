@@ -23,6 +23,12 @@ const dialogueSessions = new Map();
 const rateLimitStore = new Map();
 
 const isProd = (process.env.NODE_ENV || "development") === "production";
+const adminUserIds = new Set(
+  (process.env.ADMIN_USER_IDS || "demo-admin,ops")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
 
 let pgClient = null;
 
@@ -414,6 +420,24 @@ const getAuthSession = async (token) => {
   return session;
 };
 
+const requireAdminSession = async (req, res) => {
+  const cookies = parseCookies(req);
+  const token = cookies.interfaith_session;
+  const session = await getAuthSession(token);
+
+  if (!session) {
+    sendJson(req, res, 401, { ok: false, error: "Admin auth required" });
+    return null;
+  }
+
+  if (!adminUserIds.has(session.userId)) {
+    sendJson(req, res, 403, { ok: false, error: "Admin role required", userId: session.userId });
+    return null;
+  }
+
+  return session;
+};
+
 const searchCitationsPostgres = async ({ q, tradition, language, limit }) => {
   if (!pgClient) return null;
 
@@ -720,6 +744,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/reports") {
+    const admin = await requireAdminSession(req, res);
+    if (!admin) return;
+
     const status = (url.searchParams.get("status") || "").toLowerCase().trim();
     const validStates = new Set(["new", "triaged", "actioned", "resolved"]);
     const filtered = !status || !validStates.has(status)
@@ -734,6 +761,9 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/reports/status") {
+    const admin = await requireAdminSession(req, res);
+    if (!admin) return;
+
     const body = await readBody(req);
     const reportId = (body.reportId || "").toString();
     const status = (body.status || "").toString().toLowerCase();
@@ -750,7 +780,7 @@ const server = http.createServer(async (req, res) => {
 
     report.status = status;
     report.reviewerNote = (body.reviewerNote || "").toString() || null;
-    report.reviewedBy = (body.reviewedBy || "moderator").toString();
+    report.reviewedBy = (body.reviewedBy || admin.userId || "moderator").toString();
     report.reviewedAt = new Date().toISOString();
 
     return sendJson(req, res, 200, { ok: true, report });
