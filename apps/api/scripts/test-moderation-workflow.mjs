@@ -69,6 +69,12 @@ async function main() {
     assert.equal(filteredRes.status, 200);
     assert.ok(filtered.reports.some((r) => r.id === created.report.id));
 
+    const historyRes = await fetch(`${API_BASE_URL}/reports/${created.report.id}/history`, { headers: { cookie: adminCookie } });
+    const history = await historyRes.json();
+    assert.equal(historyRes.status, 200);
+    assert.ok(history.count >= 2);
+    assert.equal(history.events[0].eventType, "report_created");
+
     console.log("✅ Moderation workflow tests passed");
   } finally {
     child.kill("SIGTERM");

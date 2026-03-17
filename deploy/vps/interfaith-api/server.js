@@ -95,6 +95,7 @@ app.use((req, res, next) => {
 
 const queueByUser = new Map();
 const reports = [];
+const reportEvents = [];
 const dialogueSessions = new Map();
 const authSessions = new Map();
 const rateLimitStore = new Map();
@@ -386,6 +387,16 @@ app.post(route('/reports'), (req, res) => {
     createdAt: new Date().toISOString()
   };
   reports.push(report);
+  reportEvents.push({
+    id: crypto.randomUUID(),
+    reportId: report.id,
+    eventType: 'report_created',
+    actorUserId: report.reporterUserId,
+    fromStatus: null,
+    toStatus: 'new',
+    note: report.notes || null,
+    createdAt: report.createdAt
+  });
   res.json({ ok: true, report });
 });
 
@@ -397,6 +408,20 @@ app.get(route('/reports'), (req, res) => {
   const validStates = new Set(['new', 'triaged', 'actioned', 'resolved']);
   const filtered = !status || !validStates.has(status) ? reports : reports.filter((r) => (r.status || 'new') === status);
   res.json({ ok: true, count: filtered.length, reports: filtered.slice(-50) });
+});
+
+app.get(route('/reports/:reportId/history'), (req, res) => {
+  const admin = requireAdminSession(req, res);
+  if (!admin) return;
+
+  const reportId = String(req.params.reportId || '');
+  if (!reportId) return res.status(400).json({ ok: false, error: 'Invalid reportId' });
+
+  const report = reports.find((r) => r.id === reportId);
+  if (!report) return res.status(404).json({ ok: false, error: 'Report not found' });
+
+  const events = reportEvents.filter((e) => e.reportId === reportId).sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  res.json({ ok: true, reportId, count: events.length, events });
 });
 
 app.post(route('/reports/status'), (req, res) => {
@@ -413,10 +438,22 @@ app.post(route('/reports/status'), (req, res) => {
   const report = reports.find((r) => r.id === reportId);
   if (!report) return res.status(404).json({ ok: false, error: 'Report not found' });
 
+  const fromStatus = report.status || 'new';
   report.status = status;
   report.reviewerNote = String(body.reviewerNote || '') || null;
   report.reviewedBy = String(body.reviewedBy || admin.userId || 'moderator');
   report.reviewedAt = new Date().toISOString();
+
+  reportEvents.push({
+    id: crypto.randomUUID(),
+    reportId: report.id,
+    eventType: 'status_changed',
+    actorUserId: report.reviewedBy,
+    fromStatus,
+    toStatus: report.status,
+    note: report.reviewerNote,
+    createdAt: report.reviewedAt
+  });
 
   res.json({ ok: true, report });
 });

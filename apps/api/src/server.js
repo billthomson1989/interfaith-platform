@@ -236,6 +236,26 @@ const initPostgresIfEnabled = async () => {
         target_user_id text,
         category text not null,
         notes text,
+        status text not null default 'new',
+        reviewer_note text,
+        reviewed_by text,
+        reviewed_at timestamptz,
+        created_at timestamptz not null default now()
+      )
+    `);
+    await pgClient.query(`alter table moderation_reports add column if not exists status text not null default 'new'`);
+    await pgClient.query(`alter table moderation_reports add column if not exists reviewer_note text`);
+    await pgClient.query(`alter table moderation_reports add column if not exists reviewed_by text`);
+    await pgClient.query(`alter table moderation_reports add column if not exists reviewed_at timestamptz`);
+    await pgClient.query(`
+      create table if not exists report_events (
+        id text primary key,
+        report_id text not null,
+        event_type text not null,
+        actor_user_id text,
+        from_status text,
+        to_status text,
+        note text,
         created_at timestamptz not null default now()
       )
     `);
@@ -539,6 +559,133 @@ const searchCitationsPostgres = async ({ q, tradition, language, limit }) => {
   return rows.map((item) => ({ ...item, canonicalKey: item.canonical_key }));
 };
 
+const listReports = async ({ status }) => {
+  const validStates = new Set(["new", "triaged", "actioned", "resolved"]);
+  const normalizedStatus = (status || "").toLowerCase().trim();
+
+  if (pgClient) {
+    const values = [];
+    let where = "";
+    if (normalizedStatus && validStates.has(normalizedStatus)) {
+      values.push(normalizedStatus);
+      where = `where status = $1`;
+    }
+
+    const { rows } = await pgClient.query(
+      `select id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at
+       from moderation_reports
+       ${where}
+       order by created_at desc
+       limit 50`,
+      values
+    );
+
+    return rows.map((r) => ({
+      id: r.id,
+      sessionId: r.session_id,
+      reporterUserId: r.reporter_user_id,
+      targetUserId: r.target_user_id,
+      category: r.category,
+      notes: r.notes,
+      status: r.status,
+      reviewerNote: r.reviewer_note,
+      reviewedBy: r.reviewed_by,
+      reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : null,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : null
+    }));
+  }
+
+  return (!normalizedStatus || !validStates.has(normalizedStatus)
+    ? moderationReports
+    : moderationReports.filter((r) => (r.status || "new") === normalizedStatus)
+  ).slice(-50);
+};
+
+const getReportById = async (reportId) => {
+  if (pgClient) {
+    const { rows } = await pgClient.query(
+      `select id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at
+       from moderation_reports where id = $1 limit 1`,
+      [reportId]
+    );
+    const r = rows[0];
+    if (!r) return null;
+    return {
+      id: r.id,
+      sessionId: r.session_id,
+      reporterUserId: r.reporter_user_id,
+      targetUserId: r.target_user_id,
+      category: r.category,
+      notes: r.notes,
+      status: r.status,
+      reviewerNote: r.reviewer_note,
+      reviewedBy: r.reviewed_by,
+      reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : null,
+      createdAt: r.created_at ? new Date(r.created_at).toISOString() : null
+    };
+  }
+
+  return moderationReports.find((r) => r.id === reportId) || null;
+};
+
+const addReportEvent = async ({ reportId, eventType, actorUserId = null, fromStatus = null, toStatus = null, note = null }) => {
+  if (!pgClient) return;
+
+  await pgClient.query(
+    `insert into report_events(id, report_id, event_type, actor_user_id, from_status, to_status, note, created_at)
+     values($1,$2,$3,$4,$5,$6,$7,$8)`,
+    [crypto.randomUUID(), reportId, eventType, actorUserId, fromStatus, toStatus, note, new Date().toISOString()]
+  );
+};
+
+const listReportEvents = async (reportId) => {
+  if (!pgClient) {
+    const report = moderationReports.find((r) => r.id === reportId);
+    if (!report) return [];
+    return [
+      {
+        eventType: "report_created",
+        actorUserId: report.reporterUserId,
+        fromStatus: null,
+        toStatus: "new",
+        note: report.notes || null,
+        createdAt: report.createdAt
+      },
+      ...(report.reviewedAt
+        ? [
+            {
+              eventType: "status_changed",
+              actorUserId: report.reviewedBy,
+              fromStatus: "new",
+              toStatus: report.status,
+              note: report.reviewerNote,
+              createdAt: report.reviewedAt
+            }
+          ]
+        : [])
+    ];
+  }
+
+  const { rows } = await pgClient.query(
+    `select id, report_id, event_type, actor_user_id, from_status, to_status, note, created_at
+     from report_events
+     where report_id = $1
+     order by created_at asc`,
+    [reportId]
+  );
+
+  return rows.map((r) => ({
+    id: r.id,
+    reportId: r.report_id,
+    eventType: r.event_type,
+    actorUserId: r.actor_user_id,
+    fromStatus: r.from_status,
+    toStatus: r.to_status,
+    note: r.note,
+    createdAt: r.created_at ? new Date(r.created_at).toISOString() : null
+  }));
+};
+
 const server = http.createServer(async (req, res) => {
   req._requestMeta = { id: crypto.randomUUID(), startedAt: Date.now() };
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
@@ -821,10 +968,29 @@ const server = http.createServer(async (req, res) => {
 
     if (pgClient) {
       await pgClient.query(
-        `insert into moderation_reports(id, session_id, reporter_user_id, target_user_id, category, notes, created_at)
-         values($1,$2,$3,$4,$5,$6,$7)`,
-        [report.id, report.sessionId, report.reporterUserId, report.targetUserId, report.category, report.notes, report.createdAt]
+        `insert into moderation_reports(id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at)
+         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        [
+          report.id,
+          report.sessionId,
+          report.reporterUserId,
+          report.targetUserId,
+          report.category,
+          report.notes,
+          report.status,
+          report.reviewerNote,
+          report.reviewedBy,
+          report.reviewedAt,
+          report.createdAt
+        ]
       );
+      await addReportEvent({
+        reportId: report.id,
+        eventType: "report_created",
+        actorUserId: report.reporterUserId,
+        toStatus: "new",
+        note: report.notes || null
+      });
     }
 
     return sendJson(req, res, 201, { ok: true, report });
@@ -835,16 +1001,31 @@ const server = http.createServer(async (req, res) => {
     if (!admin) return;
 
     const status = (url.searchParams.get("status") || "").toLowerCase().trim();
-    const validStates = new Set(["new", "triaged", "actioned", "resolved"]);
-    const filtered = !status || !validStates.has(status)
-      ? moderationReports
-      : moderationReports.filter((r) => (r.status || "new") === status);
+    const filtered = await listReports({ status });
 
     return sendJson(req, res, 200, {
       ok: true,
       count: filtered.length,
-      reports: filtered.slice(-50)
+      reports: filtered
     });
+  }
+
+  if (req.method === "GET" && /^\/reports\/[^/]+\/history$/.test(url.pathname)) {
+    const admin = await requireAdminSession(req, res);
+    if (!admin) return;
+
+    const reportId = decodeURIComponent(url.pathname.split("/")[2] || "");
+    if (!reportId) {
+      return sendJson(req, res, 400, { ok: false, error: "Invalid reportId" });
+    }
+
+    const report = await getReportById(reportId);
+    if (!report) {
+      return sendJson(req, res, 404, { ok: false, error: "Report not found" });
+    }
+
+    const events = await listReportEvents(reportId);
+    return sendJson(req, res, 200, { ok: true, reportId, count: events.length, events });
   }
 
   if (req.method === "POST" && url.pathname === "/reports/status") {
@@ -860,15 +1041,41 @@ const server = http.createServer(async (req, res) => {
       return sendJson(req, res, 400, { ok: false, error: "Invalid reportId or status" });
     }
 
-    const report = moderationReports.find((r) => r.id === reportId);
+    const report = await getReportById(reportId);
     if (!report) {
       return sendJson(req, res, 404, { ok: false, error: "Report not found" });
     }
 
+    const fromStatus = report.status || "new";
     report.status = status;
     report.reviewerNote = (body.reviewerNote || "").toString() || null;
     report.reviewedBy = (body.reviewedBy || admin.userId || "moderator").toString();
     report.reviewedAt = new Date().toISOString();
+
+    if (pgClient) {
+      await pgClient.query(
+        `update moderation_reports
+         set status = $2, reviewer_note = $3, reviewed_by = $4, reviewed_at = $5
+         where id = $1`,
+        [report.id, report.status, report.reviewerNote, report.reviewedBy, report.reviewedAt]
+      );
+      await addReportEvent({
+        reportId: report.id,
+        eventType: "status_changed",
+        actorUserId: report.reviewedBy,
+        fromStatus,
+        toStatus: report.status,
+        note: report.reviewerNote
+      });
+    } else {
+      const local = moderationReports.find((r) => r.id === reportId);
+      if (local) {
+        local.status = report.status;
+        local.reviewerNote = report.reviewerNote;
+        local.reviewedBy = report.reviewedBy;
+        local.reviewedAt = report.reviewedAt;
+      }
+    }
 
     return sendJson(req, res, 200, { ok: true, report });
   }
