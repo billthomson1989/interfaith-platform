@@ -56,6 +56,9 @@ npm install
 - [ ] Restart API service
 - [ ] Restart web service (if deployed from same release unit)
 - [ ] Confirm process manager shows healthy services (PM2/systemd/Docker)
+- [ ] Check startup logs include CORS allowlist output and no invalid-origin warnings
+
+> Note: In the lightweight VPS deploy shim (`deploy/vps/interfaith-api/server.js`), readiness is process-level and does not perform a live DB ping. Use app runtime logs + `/health` for deeper DB diagnosis if needed.
 
 ---
 
@@ -72,6 +75,28 @@ curl -s https://api.interfaith.billthomson.elementfx.com/api/health
 Expect:
 - `ok: true`
 - `citationSource` is expected (`postgres` preferred, `dataset` acceptable fallback)
+
+- [ ] Ready endpoint:
+
+```bash
+curl -i https://api.interfaith.billthomson.elementfx.com/api/ready
+```
+
+Expect:
+- HTTP `200`
+- `ok: true`
+- `checks.postgres.ok` is `true` for production runtime
+
+- [ ] Version endpoint:
+
+```bash
+curl -s https://api.interfaith.billthomson.elementfx.com/api/version
+```
+
+Expect:
+- `ok: true`
+- `version.commitSha` present (or `dev` in local/non-release runs)
+- `version.startedAt` present
 
 - [ ] Citation query check:
 

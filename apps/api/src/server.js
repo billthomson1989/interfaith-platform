@@ -6,6 +6,9 @@ import { fileURLToPath } from "node:url";
 
 const port = Number(process.env.API_PORT || 4000);
 const usePostgres = process.env.USE_POSTGRES === "true";
+const commitSha = process.env.COMMIT_SHA || process.env.GIT_COMMIT || "dev";
+const buildTime = process.env.BUILD_TIME || null;
+const startedAt = new Date().toISOString();
 
 const allowedOrigins = (process.env.CORS_ORIGINS || "http://localhost:3000,http://127.0.0.1:3000")
   .split(",")
@@ -301,6 +304,29 @@ const initPostgresIfEnabled = async () => {
   }
 };
 
+const validateCorsOrigins = () => {
+  if (!allowedOrigins.length) {
+    console.warn("[api] CORS allowlist is empty; only same-origin requests may work");
+    return;
+  }
+
+  const invalid = allowedOrigins.filter((origin) => {
+    if (origin === "*") return true;
+    try {
+      const u = new URL(origin);
+      return !u.protocol.startsWith("http");
+    } catch {
+      return true;
+    }
+  });
+
+  if (invalid.length) {
+    console.warn(`[api] CORS allowlist has invalid entries: ${invalid.join(", ")}`);
+  }
+
+  console.log(`[api] CORS allowlist: ${allowedOrigins.join(", ")}`);
+};
+
 const resolveCorsOrigin = (req) => {
   const origin = req.headers.origin;
   if (!origin) return allowedOrigins[0] || "http://localhost:3000";
@@ -551,6 +577,18 @@ const server = http.createServer(async (req, res) => {
         }
       },
       timestamp: new Date().toISOString()
+    });
+  }
+
+  if (req.method === "GET" && url.pathname === "/version") {
+    return sendJson(req, res, 200, {
+      ok: true,
+      service: "interfaith-api",
+      version: {
+        commitSha,
+        buildTime,
+        startedAt
+      }
     });
   }
 
@@ -861,6 +899,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 initPostgresIfEnabled().finally(() => {
+  validateCorsOrigins();
   server.listen(port, () => {
     console.log(`[api] listening on http://localhost:${port}`);
   });

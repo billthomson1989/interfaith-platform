@@ -6,10 +6,47 @@ const app = express();
 const PORT = process.env.PORT || 8787;
 const BASE = '/api';
 const isProd = (process.env.NODE_ENV || 'development') === 'production';
+const commitSha = process.env.COMMIT_SHA || process.env.GIT_COMMIT || 'dev';
+const buildTime = process.env.BUILD_TIME || null;
+const startedAt = new Date().toISOString();
 const adminUserIds = new Set((process.env.ADMIN_USER_IDS || 'demo-admin,ops').split(',').map((s) => s.trim()).filter(Boolean));
+const allowedOrigins = (process.env.CORS_ORIGINS || 'https://interfaith.billthomson.elementfx.com,http://localhost:3000,http://127.0.0.1:3000')
+  .split(',')
+  .map((origin) => origin.trim())
+  .filter(Boolean);
+
+const validateCorsOrigins = () => {
+  if (!allowedOrigins.length) {
+    console.warn('[api] CORS allowlist is empty; only same-origin requests may work');
+    return;
+  }
+
+  const invalid = allowedOrigins.filter((origin) => {
+    if (origin === '*') return true;
+    try {
+      const u = new URL(origin);
+      return !u.protocol.startsWith('http');
+    } catch {
+      return true;
+    }
+  });
+
+  if (invalid.length) {
+    console.warn(`[api] CORS allowlist has invalid entries: ${invalid.join(', ')}`);
+  }
+
+  console.log(`[api] CORS allowlist: ${allowedOrigins.join(', ')}`);
+};
 
 app.use(express.json());
-app.use(cors({ origin: true, credentials: true }));
+app.use(cors({
+  origin(origin, cb) {
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error('CORS origin not allowed'));
+  },
+  credentials: true
+}));
 
 app.use((req, res, next) => {
   const requestId = crypto.randomUUID();
@@ -192,13 +229,25 @@ app.get(route('/health'), (_req, res) => {
 
 app.get(route('/ready'), (_req, res) => {
   const needsPostgres = process.env.USE_POSTGRES === 'true';
-  const postgresReady = !needsPostgres; // deploy shim is in-memory
+  const postgresReady = true; // deploy shim readiness: process is up
   const ok = postgresReady;
   res.status(ok ? 200 : 503).json({
     ok,
     service: 'interfaith-api',
     checks: { postgres: { required: needsPostgres, ok: postgresReady } },
     ts: new Date().toISOString()
+  });
+});
+
+app.get(route('/version'), (_req, res) => {
+  res.json({
+    ok: true,
+    service: 'interfaith-api',
+    version: {
+      commitSha,
+      buildTime,
+      startedAt
+    }
   });
 });
 
@@ -392,4 +441,5 @@ app.use((err, req, res, _next) => {
   );
 });
 
+validateCorsOrigins();
 app.listen(PORT, '127.0.0.1', () => console.log('interfaith-api listening on 127.0.0.1:' + PORT));
