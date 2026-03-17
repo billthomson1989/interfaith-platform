@@ -20,6 +20,9 @@ const queueByUser = new Map();
 const moderationReports = [];
 const authSessions = new Map();
 const dialogueSessions = new Map();
+const rateLimitStore = new Map();
+
+const isProd = (process.env.NODE_ENV || "development") === "production";
 
 let pgClient = null;
 
@@ -254,6 +257,13 @@ const initPostgresIfEnabled = async () => {
         updated_at timestamptz not null default now()
       )
     `);
+    await pgClient.query(`
+      create table if not exists auth_sessions (
+        token text primary key,
+        user_id text not null,
+        created_at timestamptz not null default now()
+      )
+    `);
 
     const { rows } = await pgClient.query(`select count(*)::int as count from citations`);
     if ((rows?.[0]?.count || 0) === 0 && citations.length) {
@@ -340,6 +350,70 @@ const parseCookies = (req) => {
   );
 };
 
+const getClientIp = (req) => {
+  const xff = req.headers["x-forwarded-for"];
+  if (typeof xff === "string" && xff.trim()) return xff.split(",")[0].trim();
+  return req.socket?.remoteAddress || "unknown";
+};
+
+const checkRateLimit = ({ key, limit, windowMs }) => {
+  const now = Date.now();
+  const bucket = rateLimitStore.get(key) || { count: 0, resetAt: now + windowMs };
+
+  if (now > bucket.resetAt) {
+    bucket.count = 0;
+    bucket.resetAt = now + windowMs;
+  }
+
+  bucket.count += 1;
+  rateLimitStore.set(key, bucket);
+
+  if (bucket.count > limit) {
+    return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+  }
+
+  return { allowed: true, remaining: Math.max(0, limit - bucket.count) };
+};
+
+const cookieSessionValue = (token) => {
+  const parts = [
+    `interfaith_session=${encodeURIComponent(token)}`,
+    "Path=/",
+    "HttpOnly",
+    "SameSite=Lax",
+    "Max-Age=86400"
+  ];
+  if (isProd) parts.push("Secure");
+  return parts.join("; ");
+};
+
+const storeAuthSession = async ({ token, userId, createdAt }) => {
+  authSessions.set(token, { userId, createdAt });
+  if (!pgClient) return;
+
+  await pgClient.query(
+    `insert into auth_sessions(token, user_id, created_at)
+     values($1,$2,$3)
+     on conflict(token) do update set user_id = excluded.user_id, created_at = excluded.created_at`,
+    [token, userId, createdAt]
+  );
+};
+
+const getAuthSession = async (token) => {
+  if (!token) return null;
+
+  const local = authSessions.get(token);
+  if (local) return local;
+  if (!pgClient) return null;
+
+  const { rows } = await pgClient.query(`select user_id, created_at from auth_sessions where token = $1`, [token]);
+  if (!rows.length) return null;
+
+  const session = { userId: rows[0].user_id, createdAt: new Date(rows[0].created_at).toISOString() };
+  authSessions.set(token, session);
+  return session;
+};
+
 const searchCitationsPostgres = async ({ q, tradition, language, limit }) => {
   if (!pgClient) return null;
 
@@ -417,24 +491,30 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/auth/login") {
+    const rl = checkRateLimit({ key: `auth_login:${getClientIp(req)}`, limit: 15, windowMs: 60_000 });
+    if (!rl.allowed) {
+      return sendJson(req, res, 429, { ok: false, error: "Rate limit exceeded", retryAfterSec: rl.retryAfterSec });
+    }
+
     const body = await readBody(req);
     const userId = (body.userId || "demo-user").toString();
     const token = crypto.randomUUID();
-    authSessions.set(token, { userId, createdAt: new Date().toISOString() });
+    const createdAt = new Date().toISOString();
+    await storeAuthSession({ token, userId, createdAt });
 
     return sendJson(
       req,
       res,
       200,
       { ok: true, userId, sessionToken: token },
-      { "Set-Cookie": `interfaith_session=${encodeURIComponent(token)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=86400` }
+      { "Set-Cookie": cookieSessionValue(token) }
     );
   }
 
   if (req.method === "GET" && url.pathname === "/me") {
     const cookies = parseCookies(req);
     const token = cookies.interfaith_session;
-    const session = token ? authSessions.get(token) : null;
+    const session = await getAuthSession(token);
 
     if (!session) {
       return sendJson(req, res, 401, { ok: false, error: "Not authenticated" });
@@ -444,6 +524,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/queue/join") {
+    const rl = checkRateLimit({ key: `queue_join:${getClientIp(req)}`, limit: 30, windowMs: 60_000 });
+    if (!rl.allowed) {
+      return sendJson(req, res, 429, { ok: false, error: "Rate limit exceeded", retryAfterSec: rl.retryAfterSec });
+    }
+
     const body = await readBody(req);
     const userId = (body.userId || "demo-user").toString();
 
@@ -524,6 +609,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/queue/leave") {
+    const rl = checkRateLimit({ key: `queue_leave:${getClientIp(req)}`, limit: 30, windowMs: 60_000 });
+    if (!rl.allowed) {
+      return sendJson(req, res, 429, { ok: false, error: "Rate limit exceeded", retryAfterSec: rl.retryAfterSec });
+    }
+
     const body = await readBody(req);
     const userId = (body.userId || "demo-user").toString();
     const removed = queueByUser.delete(userId);
@@ -596,6 +686,11 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/reports") {
+    const rl = checkRateLimit({ key: `reports:${getClientIp(req)}`, limit: 20, windowMs: 60_000 });
+    if (!rl.allowed) {
+      return sendJson(req, res, 429, { ok: false, error: "Rate limit exceeded", retryAfterSec: rl.retryAfterSec });
+    }
+
     const body = await readBody(req);
     const report = {
       id: crypto.randomUUID(),

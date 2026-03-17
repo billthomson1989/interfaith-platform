@@ -6,6 +6,7 @@ const crypto = require('crypto');
 const app = express();
 const PORT = process.env.PORT || 8787;
 const BASE = '/api';
+const isProd = (process.env.NODE_ENV || 'development') === 'production';
 
 app.use(express.json());
 app.use(morgan('tiny'));
@@ -14,6 +15,8 @@ app.use(cors({ origin: true, credentials: true }));
 const queueByUser = new Map();
 const reports = [];
 const dialogueSessions = new Map();
+const authSessions = new Map();
+const rateLimitStore = new Map();
 
 const citations = [
   { id: 'quran-2-256-en-sahih', tradition: 'islam', reference: "Qur'an 2:256", canonical_key: 'QURAN 2:256', text: 'There is no compulsion in religion.', translation: 'Sahih International', source: "Qur'an", language: 'en', tags: ['freedom', 'religion', 'conscience'] },
@@ -25,6 +28,42 @@ const citations = [
 ];
 
 const route = (path) => [path, BASE + path];
+
+const parseCookies = (req) => {
+  const raw = req.headers.cookie || '';
+  return Object.fromEntries(
+    raw.split(';').map((v) => v.trim()).filter(Boolean).map((pair) => {
+      const idx = pair.indexOf('=');
+      if (idx === -1) return [pair, ''];
+      return [pair.slice(0, idx), decodeURIComponent(pair.slice(idx + 1))];
+    })
+  );
+};
+
+const getClientIp = (req) => {
+  const xff = req.headers['x-forwarded-for'];
+  if (typeof xff === 'string' && xff.trim()) return xff.split(',')[0].trim();
+  return req.socket?.remoteAddress || 'unknown';
+};
+
+const checkRateLimit = ({ key, limit, windowMs }) => {
+  const now = Date.now();
+  const bucket = rateLimitStore.get(key) || { count: 0, resetAt: now + windowMs };
+  if (now > bucket.resetAt) {
+    bucket.count = 0;
+    bucket.resetAt = now + windowMs;
+  }
+  bucket.count += 1;
+  rateLimitStore.set(key, bucket);
+  if (bucket.count > limit) return { allowed: false, retryAfterSec: Math.max(1, Math.ceil((bucket.resetAt - now) / 1000)) };
+  return { allowed: true };
+};
+
+const cookieSessionValue = (token) => {
+  const parts = [`interfaith_session=${encodeURIComponent(token)}`, 'Path=/', 'HttpOnly', 'SameSite=Lax', 'Max-Age=86400'];
+  if (isProd) parts.push('Secure');
+  return parts.join('; ');
+};
 
 function rankCitation(item, q) {
   if (!q) return 1;
@@ -110,14 +149,23 @@ app.get(route('/health'), (_req, res) => {
 });
 
 app.post(route('/auth/login'), (req, res) => {
+  const rl = checkRateLimit({ key: `auth_login:${getClientIp(req)}`, limit: 15, windowMs: 60_000 });
+  if (!rl.allowed) return res.status(429).json({ ok: false, error: 'Rate limit exceeded', retryAfterSec: rl.retryAfterSec });
+
   const userId = String((req.body && req.body.userId) || 'demo-user');
-  const token = 'stub-' + Buffer.from(userId).toString('base64url');
-  res.json({ ok: true, token, userId });
+  const token = crypto.randomUUID();
+  const createdAt = new Date().toISOString();
+  authSessions.set(token, { userId, createdAt });
+  res.setHeader('Set-Cookie', cookieSessionValue(token));
+  res.json({ ok: true, token, userId, sessionToken: token });
 });
 
 app.get(route('/me'), (req, res) => {
-  const userId = String(req.query.userId || 'demo-user');
-  res.json({ ok: true, userId, role: 'participant' });
+  const cookies = parseCookies(req);
+  const token = cookies.interfaith_session;
+  const session = token ? authSessions.get(token) : null;
+  if (!session) return res.status(401).json({ ok: false, error: 'Not authenticated' });
+  res.json({ ok: true, userId: session.userId, sessionCreatedAt: session.createdAt });
 });
 
 app.get(route('/auth/me'), (req, res) => {
@@ -126,6 +174,9 @@ app.get(route('/auth/me'), (req, res) => {
 });
 
 app.post(route('/queue/join'), (req, res) => {
+  const rl = checkRateLimit({ key: `queue_join:${getClientIp(req)}`, limit: 30, windowMs: 60_000 });
+  if (!rl.allowed) return res.status(429).json({ ok: false, error: 'Rate limit exceeded', retryAfterSec: rl.retryAfterSec });
+
   const body = req.body || {};
   const userId = String(body.userId || 'demo-user');
 
@@ -153,9 +204,7 @@ app.get(route('/queue/status'), (req, res) => {
   const userId = String(req.query.userId || 'demo-user');
   const activeSession = findSessionByUser(userId);
 
-  if (activeSession) {
-    return res.json({ ok: true, queued: false, matched: true, session: activeSession });
-  }
+  if (activeSession) return res.json({ ok: true, queued: false, matched: true, session: activeSession });
 
   const item = queueByUser.get(userId);
   if (!item) return res.json({ ok: true, queued: false, matched: false, userId, status: 'none' });
@@ -164,6 +213,9 @@ app.get(route('/queue/status'), (req, res) => {
 });
 
 app.post(route('/queue/leave'), (req, res) => {
+  const rl = checkRateLimit({ key: `queue_leave:${getClientIp(req)}`, limit: 30, windowMs: 60_000 });
+  if (!rl.allowed) return res.status(429).json({ ok: false, error: 'Rate limit exceeded', retryAfterSec: rl.retryAfterSec });
+
   const userId = String((req.body && req.body.userId) || 'demo-user');
   const removed = queueByUser.delete(userId);
   res.json({ ok: true, removed, userId, status: 'left' });
@@ -175,12 +227,7 @@ app.get(route('/session/status'), (req, res) => {
 
   if (!session) return res.json({ ok: true, active: false, userId });
 
-  res.json({
-    ok: true,
-    active: true,
-    session,
-    partnerUserId: session.participants.find((id) => id !== userId) || null
-  });
+  res.json({ ok: true, active: true, session, partnerUserId: session.participants.find((id) => id !== userId) || null });
 });
 
 app.post(route('/session/end'), (req, res) => {
@@ -199,6 +246,9 @@ app.post(route('/session/end'), (req, res) => {
 });
 
 app.post(route('/reports'), (req, res) => {
+  const rl = checkRateLimit({ key: `reports:${getClientIp(req)}`, limit: 20, windowMs: 60_000 });
+  if (!rl.allowed) return res.status(429).json({ ok: false, error: 'Rate limit exceeded', retryAfterSec: rl.retryAfterSec });
+
   const body = req.body || {};
   const report = {
     id: reports.length + 1,

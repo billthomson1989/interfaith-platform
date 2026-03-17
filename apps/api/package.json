@@ -8,7 +8,8 @@
     "start": "node src/server.js",
     "seed:citations": "node scripts/seed-citations.mjs",
     "test:citations": "node scripts/test-citation-search.mjs",
-    "test:sessions": "node scripts/test-session-lifecycle.mjs"
+    "test:sessions": "node scripts/test-session-lifecycle.mjs",
+    "test:auth": "node scripts/test-auth-hardening.mjs"
   },
   "dependencies": {
     "pg": "^8.12.0"
