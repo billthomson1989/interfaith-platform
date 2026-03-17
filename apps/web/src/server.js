@@ -99,6 +99,50 @@ const html = `<!doctype html>
     </div>
 
     <div class="card">
+      <h3>Moderation admin</h3>
+      <div class="row">
+        <div>
+          <label>Status filter</label>
+          <select id="reportStatusFilter">
+            <option value="">All</option>
+            <option value="new">new</option>
+            <option value="triaged">triaged</option>
+            <option value="actioned">actioned</option>
+            <option value="resolved">resolved</option>
+          </select>
+        </div>
+        <div style="align-self:flex-end;">
+          <button onclick="loadReports()">Load reports</button>
+        </div>
+      </div>
+      <div id="reportsOut" class="result">No reports loaded.</div>
+      <div class="row">
+        <div>
+          <label>Report ID</label>
+          <input id="reviewReportId" placeholder="report-id" />
+        </div>
+        <div>
+          <label>New status</label>
+          <select id="reviewStatus">
+            <option value="triaged">triaged</option>
+            <option value="actioned">actioned</option>
+            <option value="resolved">resolved</option>
+          </select>
+        </div>
+        <div>
+          <label>Reviewer</label>
+          <input id="reviewedBy" value="ops" />
+        </div>
+      </div>
+      <label>Reviewer note</label>
+      <textarea id="reviewerNote"></textarea>
+      <div class="row" style="margin-top:.75rem;">
+        <button onclick="updateReportStatus()">Update report status</button>
+      </div>
+      <pre id="reportAdminOut" class="result">No moderation action yet.</pre>
+    </div>
+
+    <div class="card">
       <h3>Citation search</h3>
       <div class="row">
         <div>
@@ -194,6 +238,32 @@ const html = `<!doctype html>
 
         const data = await jfetch('/reports', { method: 'POST', body: JSON.stringify(payload) });
         document.getElementById('reportOut').textContent = JSON.stringify(data, null, 2);
+      }
+
+      async function loadReports() {
+        const status = encodeURIComponent(document.getElementById('reportStatusFilter').value);
+        const data = await jfetch('/reports' + (status ? ('?status=' + status) : ''));
+
+        if (!data.reports || !data.reports.length) {
+          document.getElementById('reportsOut').textContent = 'No reports found.';
+          return;
+        }
+
+        document.getElementById('reportsOut').innerHTML = data.reports
+          .map((r) => '<div style="margin-bottom:.6rem;"><strong>' + r.id + '</strong> · <em>' + (r.status || 'new') + '</em><br/>' + (r.category || '') + ' · ' + (r.reporterUserId || '') + '<br/><span class="muted">' + (r.notes || '') + '</span></div>')
+          .join('');
+      }
+
+      async function updateReportStatus() {
+        const payload = {
+          reportId: document.getElementById('reviewReportId').value.trim(),
+          status: document.getElementById('reviewStatus').value,
+          reviewerNote: document.getElementById('reviewerNote').value.trim(),
+          reviewedBy: document.getElementById('reviewedBy').value.trim() || 'ops'
+        };
+
+        const data = await jfetch('/reports/status', { method: 'POST', body: JSON.stringify(payload) });
+        document.getElementById('reportAdminOut').textContent = JSON.stringify(data, null, 2);
       }
 
       async function searchCitations() {

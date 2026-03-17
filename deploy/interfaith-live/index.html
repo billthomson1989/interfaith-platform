@@ -98,7 +98,46 @@
     <div id="citationOut"><pre>No search yet.</pre></div>
   </div>
 
-  <script src="/assets/js/config.js?v=phase2c"></script>
-  <script src="/assets/js/app.js?v=phase2c"></script>
+  <div class="card">
+    <h3>Moderation admin</h3>
+    <div class="row">
+      <div>
+        <label>Status filter<br />
+          <select id="reportStatusFilter">
+            <option value="">All</option>
+            <option value="new">new</option>
+            <option value="triaged">triaged</option>
+            <option value="actioned">actioned</option>
+            <option value="resolved">resolved</option>
+          </select>
+        </label>
+      </div>
+      <button id="btnLoadReports">Load reports</button>
+    </div>
+    <div id="reportsOut"><pre>No reports loaded.</pre></div>
+    <div class="row" style="margin-top:.75rem;">
+      <div>
+        <label>Report ID<br /><input id="reviewReportId" placeholder="report-id" /></label>
+      </div>
+      <div>
+        <label>New status<br />
+          <select id="reviewStatus">
+            <option value="triaged">triaged</option>
+            <option value="actioned">actioned</option>
+            <option value="resolved">resolved</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <label>Reviewer<br /><input id="reviewedBy" value="ops" /></label>
+      </div>
+    </div>
+    <label>Reviewer note<br /><textarea id="reviewerNote"></textarea></label>
+    <button id="btnUpdateReportStatus">Update report status</button>
+    <pre id="reportAdminOut">No moderation action yet.</pre>
+  </div>
+
+  <script src="/assets/js/config.js?v=phase2d"></script>
+  <script src="/assets/js/app.js?v=phase2d"></script>
 </body>
 </html>

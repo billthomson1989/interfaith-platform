@@ -98,6 +98,32 @@ async function searchCitations() {
     .join("");
 }
 
+async function loadReports() {
+  const status = document.getElementById("reportStatusFilter").value;
+  const d = await jf("/reports" + (status ? `?status=${encodeURIComponent(status)}` : ""));
+
+  if (!d.reports || !d.reports.length) {
+    document.getElementById("reportsOut").textContent = "No reports found.";
+    return;
+  }
+
+  document.getElementById("reportsOut").innerHTML = d.reports
+    .map((r) => `<div style="margin-bottom:.6rem;"><strong>${r.id}</strong> · <em>${r.status || "new"}</em><br/>${r.category} · ${(r.reporterUserId || "unknown")}<br/><span class="muted">${r.notes || ""}</span></div>`)
+    .join("");
+}
+
+async function updateReportStatus() {
+  const payload = {
+    reportId: document.getElementById("reviewReportId").value.trim(),
+    status: document.getElementById("reviewStatus").value,
+    reviewerNote: document.getElementById("reviewerNote").value.trim(),
+    reviewedBy: document.getElementById("reviewedBy").value.trim() || "ops"
+  };
+
+  const d = await jf("/reports/status", { method: "POST", body: JSON.stringify(payload) });
+  document.getElementById("reportAdminOut").textContent = JSON.stringify(d, null, 2);
+}
+
 document.getElementById("btnLogin").addEventListener("click", login);
 document.getElementById("btnMe").addEventListener("click", whoami);
 document.getElementById("btnJoinQueue").addEventListener("click", joinQueue);
@@ -107,3 +133,5 @@ document.getElementById("btnSessionStatus").addEventListener("click", sessionSta
 document.getElementById("btnEndSession").addEventListener("click", endSession);
 document.getElementById("btnReport").addEventListener("click", reportIt);
 document.getElementById("btnSearchCitations").addEventListener("click", searchCitations);
+document.getElementById("btnLoadReports").addEventListener("click", loadReports);
+document.getElementById("btnUpdateReportStatus").addEventListener("click", updateReportStatus);
