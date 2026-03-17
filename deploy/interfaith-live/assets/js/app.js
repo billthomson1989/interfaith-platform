@@ -39,8 +39,8 @@ async function refreshAdminBadge() {
 
     const isAdmin = ADMIN_IDS.has(d.userId);
     el.textContent = isAdmin
-      ? `Admin status: ✅ ${d.userId} (admin)`
-      : `Admin status: ⚠️ ${d.userId} (not admin)`;
+      ? `Admin status: ${d.userId} (admin)`
+      : `Admin status: ${d.userId} (not admin)`;
   } catch {
     el.textContent = "Admin status: not logged in";
   }
