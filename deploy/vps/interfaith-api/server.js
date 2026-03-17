@@ -1,6 +1,7 @@
 const express = require('express');
 const cors = require('cors');
 const morgan = require('morgan');
+const crypto = require('crypto');
 
 const app = express();
 const PORT = process.env.PORT || 8787;
@@ -10,8 +11,9 @@ app.use(express.json());
 app.use(morgan('tiny'));
 app.use(cors({ origin: true, credentials: true }));
 
-const queue = new Map();
+const queueByUser = new Map();
 const reports = [];
+const dialogueSessions = new Map();
 
 const citations = [
   { id: 'quran-2-256-en-sahih', tradition: 'islam', reference: "Qur'an 2:256", canonical_key: 'QURAN 2:256', text: 'There is no compulsion in religion.', translation: 'Sahih International', source: "Qur'an", language: 'en', tags: ['freedom', 'religion', 'conscience'] },
@@ -47,8 +49,64 @@ function rankCitation(item, q) {
   return score;
 }
 
+function resolveMatchedMode(a, b) {
+  const left = (a || '').toString();
+  const right = (b || '').toString();
+  if (left === right) return left;
+  const pair = new Set([left, right]);
+  if (pair.has('voice_only') && pair.has('voice_then_video')) return 'voice_then_video';
+  return null;
+}
+
+function canMatch(a, b) {
+  const sameLanguage = (a.language || '').toLowerCase() === (b.language || '').toLowerCase();
+  return sameLanguage && Boolean(resolveMatchedMode(a.mode, b.mode));
+}
+
+function tryMatchForUser(newEntry) {
+  const candidate = [...queueByUser.values()]
+    .filter((c) => c.userId !== newEntry.userId)
+    .filter((c) => canMatch(newEntry, c))
+    .sort((a, b) => new Date(a.queuedAt).getTime() - new Date(b.queuedAt).getTime())[0];
+
+  if (!candidate) return null;
+
+  const now = new Date().toISOString();
+  const session = {
+    sessionId: crypto.randomUUID(),
+    state: 'active',
+    mode: resolveMatchedMode(newEntry.mode, candidate.mode) || newEntry.mode,
+    language: (newEntry.language || 'en').toLowerCase(),
+    participants: [newEntry.userId, candidate.userId].sort(),
+    matchedAt: now,
+    startedAt: now,
+    endedAt: null,
+    endedReason: null
+  };
+
+  dialogueSessions.set(session.sessionId, session);
+  queueByUser.delete(newEntry.userId);
+  queueByUser.delete(candidate.userId);
+  return session;
+}
+
+function findSessionByUser(userId) {
+  for (const session of dialogueSessions.values()) {
+    if (session.participants.includes(userId) && session.state !== 'ended') return session;
+  }
+  return null;
+}
+
 app.get(route('/health'), (_req, res) => {
-  res.json({ ok: true, service: 'interfaith-api', persistence: (process.env.USE_POSTGRES === 'true' ? 'postgres' : 'memory'), citationSource: 'dataset', ts: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: 'interfaith-api',
+    persistence: (process.env.USE_POSTGRES === 'true' ? 'postgres' : 'memory'),
+    citationSource: 'dataset',
+    activeSessions: [...dialogueSessions.values()].filter((s) => s.state !== 'ended').length,
+    queueDepth: queueByUser.size,
+    ts: new Date().toISOString()
+  });
 });
 
 app.post(route('/auth/login'), (req, res) => {
@@ -70,24 +128,74 @@ app.get(route('/auth/me'), (req, res) => {
 app.post(route('/queue/join'), (req, res) => {
   const body = req.body || {};
   const userId = String(body.userId || 'demo-user');
-  const mode = String(body.modePreference || body.mode || 'voice_only');
-  const language = String(body.language || 'en');
-  const joinedAt = Date.now();
-  queue.set(userId, { mode, language, joinedAt, status: 'queued' });
-  res.json({ ok: true, userId, mode, language, joinedAt, status: 'queued' });
+
+  const existingSession = findSessionByUser(userId);
+  if (existingSession) return res.json({ ok: true, alreadyMatched: true, session: existingSession });
+
+  const entry = {
+    queueId: crypto.randomUUID(),
+    userId,
+    mode: String(body.modePreference || body.mode || 'voice_only'),
+    language: String(body.language || 'en').toLowerCase(),
+    intentTags: Array.isArray(body.intentTags) ? body.intentTags : [],
+    queuedAt: new Date().toISOString()
+  };
+
+  queueByUser.set(userId, entry);
+
+  const matchedSession = tryMatchForUser(entry);
+  if (matchedSession) return res.json({ ok: true, matched: true, queued: false, session: matchedSession });
+
+  res.json({ ok: true, matched: false, queued: true, ...entry });
 });
 
 app.get(route('/queue/status'), (req, res) => {
   const userId = String(req.query.userId || 'demo-user');
-  const item = queue.get(userId);
-  if (!item) return res.json({ ok: true, userId, status: 'none' });
-  res.json({ ok: true, userId, ...item });
+  const activeSession = findSessionByUser(userId);
+
+  if (activeSession) {
+    return res.json({ ok: true, queued: false, matched: true, session: activeSession });
+  }
+
+  const item = queueByUser.get(userId);
+  if (!item) return res.json({ ok: true, queued: false, matched: false, userId, status: 'none' });
+
+  res.json({ ok: true, queued: true, matched: false, ...item });
 });
 
 app.post(route('/queue/leave'), (req, res) => {
   const userId = String((req.body && req.body.userId) || 'demo-user');
-  queue.delete(userId);
-  res.json({ ok: true, userId, status: 'left' });
+  const removed = queueByUser.delete(userId);
+  res.json({ ok: true, removed, userId, status: 'left' });
+});
+
+app.get(route('/session/status'), (req, res) => {
+  const userId = String(req.query.userId || 'demo-user');
+  const session = findSessionByUser(userId);
+
+  if (!session) return res.json({ ok: true, active: false, userId });
+
+  res.json({
+    ok: true,
+    active: true,
+    session,
+    partnerUserId: session.participants.find((id) => id !== userId) || null
+  });
+});
+
+app.post(route('/session/end'), (req, res) => {
+  const body = req.body || {};
+  const userId = String(body.userId || 'demo-user');
+  const reason = String(body.reason || 'user_ended');
+  const session = findSessionByUser(userId);
+
+  if (!session) return res.status(404).json({ ok: false, error: 'No active session for user' });
+
+  session.state = 'ended';
+  session.endedAt = new Date().toISOString();
+  session.endedReason = reason;
+
+  res.json({ ok: true, ended: true, session });
 });
 
 app.post(route('/reports'), (req, res) => {
