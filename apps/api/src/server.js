@@ -64,6 +64,48 @@ const loadCitations = () => {
 
 const citations = loadCitations();
 
+const rankCitation = (item, q) => {
+  if (!q) return 1;
+  const query = q.toLowerCase();
+  const fields = {
+    reference: (item.reference || "").toLowerCase(),
+    canonical: (item.canonical_key || "").toLowerCase(),
+    text: (item.text || "").toLowerCase(),
+    translation: (item.translation || "").toLowerCase(),
+    source: (item.source || "").toLowerCase(),
+    tradition: (item.tradition || "").toLowerCase(),
+    tags: (item.tags || []).join(" ").toLowerCase()
+  };
+
+  let score = 0;
+  if (fields.reference.includes(query)) score += 8;
+  if (fields.canonical.includes(query)) score += 7;
+  if (fields.text.includes(query)) score += 4;
+  if (fields.tags.includes(query)) score += 3;
+  if (fields.translation.includes(query)) score += 2;
+  if (fields.source.includes(query)) score += 2;
+  if (fields.tradition.includes(query)) score += 1;
+  return score;
+};
+
+const searchCitationsInMemory = ({ q, tradition, language, limit }) => {
+  const normalizedQ = (q || "").toLowerCase().trim();
+  const normalizedTradition = (tradition || "").toLowerCase().trim();
+  const normalizedLanguage = (language || "").toLowerCase().trim();
+
+  return citations
+    .map((item) => ({ item, score: rankCitation(item, normalizedQ) }))
+    .filter(({ item, score }) => {
+      const textMatch = !normalizedQ || score > 0;
+      const traditionMatch = !normalizedTradition || item.tradition === normalizedTradition;
+      const languageMatch = !normalizedLanguage || item.language === normalizedLanguage;
+      return textMatch && traditionMatch && languageMatch;
+    })
+    .sort((a, b) => b.score - a.score || a.item.reference.localeCompare(b.item.reference))
+    .slice(0, limit)
+    .map(({ item }) => ({ ...item, canonicalKey: item.canonical_key }));
+};
+
 const canMatch = (a, b) => a.language === b.language && a.mode === b.mode;
 
 const tryMatchForUser = (newEntry) => {
@@ -148,6 +190,43 @@ const initPostgresIfEnabled = async () => {
         ended_reason text
       )
     `);
+    await pgClient.query(`
+      create table if not exists citations (
+        id text primary key,
+        tradition text not null,
+        reference text not null,
+        canonical_key text not null,
+        text text not null,
+        translation text not null,
+        source text not null,
+        language text not null,
+        tags jsonb not null default '[]'::jsonb,
+        updated_at timestamptz not null default now()
+      )
+    `);
+
+    const { rows } = await pgClient.query(`select count(*)::int as count from citations`);
+    if ((rows?.[0]?.count || 0) === 0 && citations.length) {
+      for (const c of citations) {
+        await pgClient.query(
+          `insert into citations(id, tradition, reference, canonical_key, text, translation, source, language, tags)
+           values($1,$2,$3,$4,$5,$6,$7,$8,$9)
+           on conflict(id) do update set
+             tradition = excluded.tradition,
+             reference = excluded.reference,
+             canonical_key = excluded.canonical_key,
+             text = excluded.text,
+             translation = excluded.translation,
+             source = excluded.source,
+             language = excluded.language,
+             tags = excluded.tags,
+             updated_at = now()`,
+          [c.id, c.tradition, c.reference, c.canonical_key, c.text, c.translation, c.source, c.language, JSON.stringify(c.tags || [])]
+        );
+      }
+      console.log(`[api] seeded ${citations.length} citations into postgres`);
+    }
+
     console.log("[api] postgres connected");
   } catch (error) {
     console.warn("[api] postgres init failed; falling back to in-memory", error.message);
@@ -210,6 +289,55 @@ const parseCookies = (req) => {
   );
 };
 
+const searchCitationsPostgres = async ({ q, tradition, language, limit }) => {
+  if (!pgClient) return null;
+
+  const normalizedQ = (q || "").trim();
+  const normalizedTradition = (tradition || "").toLowerCase().trim();
+  const normalizedLanguage = (language || "").toLowerCase().trim();
+
+  const where = [];
+  const values = [];
+
+  if (normalizedQ) {
+    values.push(`%${normalizedQ}%`);
+    const idx = values.length;
+    where.push(`(
+      reference ilike $${idx}
+      or canonical_key ilike $${idx}
+      or text ilike $${idx}
+      or translation ilike $${idx}
+      or source ilike $${idx}
+      or tradition ilike $${idx}
+      or exists (select 1 from jsonb_array_elements_text(tags) t(tag) where tag ilike $${idx})
+    )`);
+  }
+
+  if (normalizedTradition) {
+    values.push(normalizedTradition);
+    where.push(`tradition = $${values.length}`);
+  }
+
+  if (normalizedLanguage) {
+    values.push(normalizedLanguage);
+    where.push(`language = $${values.length}`);
+  }
+
+  values.push(limit);
+  const limitIdx = values.length;
+
+  const sql = `
+    select id, tradition, reference, canonical_key, text, translation, source, language, tags
+    from citations
+    ${where.length ? `where ${where.join(" and ")}` : ""}
+    order by reference asc
+    limit $${limitIdx}
+  `;
+
+  const { rows } = await pgClient.query(sql, values);
+  return rows.map((item) => ({ ...item, canonicalKey: item.canonical_key }));
+};
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
 
@@ -222,7 +350,7 @@ const server = http.createServer(async (req, res) => {
       ok: true,
       service: "interfaith-api",
       persistence: pgClient ? "postgres" : "memory",
-      citationSource: citations.length ? "dataset" : "empty",
+      citationSource: pgClient ? "postgres" : citations.length ? "dataset" : "empty",
       activeSessions: [...dialogueSessions.values()].filter((s) => s.state !== "ended").length,
       queueDepth: queueByUser.size,
       timestamp: new Date().toISOString()
@@ -397,34 +525,22 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/citation/search") {
-    const q = (url.searchParams.get("q") || "").toLowerCase().trim();
-    const tradition = (url.searchParams.get("tradition") || "").toLowerCase().trim();
+    const q = (url.searchParams.get("q") || "").trim();
+    const tradition = (url.searchParams.get("tradition") || url.searchParams.get("trad") || "").trim();
+    const language = (url.searchParams.get("language") || "").trim();
+    const limit = Math.max(1, Math.min(100, Number(url.searchParams.get("limit") || 25)));
 
-    const results = citations.filter((item) => {
-      const haystack = [
-        item.reference,
-        item.canonical_key,
-        item.text,
-        item.translation,
-        item.source,
-        item.tradition,
-        ...(item.tags || [])
-      ]
-        .join(" ")
-        .toLowerCase();
-
-      const textMatch = !q || haystack.includes(q);
-      const traditionMatch = !tradition || item.tradition === tradition;
-      return textMatch && traditionMatch;
-    });
+    const pgResults = await searchCitationsPostgres({ q, tradition, language, limit });
+    const results = pgResults || searchCitationsInMemory({ q, tradition, language, limit });
 
     return sendJson(req, res, 200, {
       ok: true,
       count: results.length,
-      results: results.map((item) => ({
-        ...item,
-        canonicalKey: item.canonical_key
-      }))
+      q,
+      tradition: tradition || null,
+      language: language || null,
+      source: pgResults ? "postgres" : "json",
+      results
     });
   }
 
