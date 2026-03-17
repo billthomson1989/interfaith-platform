@@ -308,15 +308,38 @@ const resolveCorsOrigin = (req) => {
   return null;
 };
 
+const logRequest = (req, statusCode, payload) => {
+  const meta = req._requestMeta || { id: "unknown", startedAt: Date.now() };
+  const durationMs = Date.now() - meta.startedAt;
+  const ip = getClientIp(req);
+  const pathOnly = req._pathname || new URL(req.url || "/", `http://${req.headers.host}`).pathname;
+
+  console.log(
+    JSON.stringify({
+      ts: new Date().toISOString(),
+      requestId: meta.id,
+      method: req.method,
+      path: pathOnly,
+      status: statusCode,
+      durationMs,
+      ip,
+      userId: req._authUserId || null,
+      ok: typeof payload?.ok === "boolean" ? payload.ok : undefined
+    })
+  );
+};
+
 const sendJson = (req, res, statusCode, payload, extraHeaders = {}) => {
   const corsOrigin = resolveCorsOrigin(req);
+  const requestId = req._requestMeta?.id || crypto.randomUUID();
 
   const baseHeaders = {
     "Content-Type": "application/json",
     "Access-Control-Allow-Credentials": "true",
     "Vary": "Origin",
     "Access-Control-Allow-Methods": "GET,POST,OPTIONS",
-    "Access-Control-Allow-Headers": "Content-Type"
+    "Access-Control-Allow-Headers": "Content-Type",
+    "X-Request-Id": requestId
   };
 
   if (corsOrigin) {
@@ -328,6 +351,7 @@ const sendJson = (req, res, statusCode, payload, extraHeaders = {}) => {
     ...extraHeaders
   });
   res.end(JSON.stringify(payload));
+  logRequest(req, statusCode, payload);
 };
 
 const readBody = async (req) => {
@@ -431,10 +455,12 @@ const requireAdminSession = async (req, res) => {
   }
 
   if (!adminUserIds.has(session.userId)) {
+    req._authUserId = session.userId;
     sendJson(req, res, 403, { ok: false, error: "Admin role required", userId: session.userId });
     return null;
   }
 
+  req._authUserId = session.userId;
   return session;
 };
 
@@ -488,7 +514,11 @@ const searchCitationsPostgres = async ({ q, tradition, language, limit }) => {
 };
 
 const server = http.createServer(async (req, res) => {
+  req._requestMeta = { id: crypto.randomUUID(), startedAt: Date.now() };
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
+  req._pathname = url.pathname;
+
+  try {
 
   if (req.method === "OPTIONS") {
     return sendJson(req, res, 200, { ok: true });
@@ -502,6 +532,24 @@ const server = http.createServer(async (req, res) => {
       citationSource: pgClient ? "postgres" : citations.length ? "dataset" : "empty",
       activeSessions: [...dialogueSessions.values()].filter((s) => s.state !== "ended").length,
       queueDepth: queueByUser.size,
+      timestamp: new Date().toISOString()
+    });
+  }
+
+  if (req.method === "GET" && url.pathname === "/ready") {
+    const needsPostgres = usePostgres;
+    const postgresReady = !needsPostgres || Boolean(pgClient);
+    const ready = postgresReady;
+
+    return sendJson(req, res, ready ? 200 : 503, {
+      ok: ready,
+      service: "interfaith-api",
+      checks: {
+        postgres: {
+          required: needsPostgres,
+          ok: postgresReady
+        }
+      },
       timestamp: new Date().toISOString()
     });
   }
@@ -544,6 +592,7 @@ const server = http.createServer(async (req, res) => {
       return sendJson(req, res, 401, { ok: false, error: "Not authenticated" });
     }
 
+    req._authUserId = session.userId;
     return sendJson(req, res, 200, { ok: true, userId: session.userId, sessionCreatedAt: session.createdAt });
   }
 
@@ -787,6 +836,28 @@ const server = http.createServer(async (req, res) => {
   }
 
   return sendJson(req, res, 404, { ok: false, error: "Not found" });
+  } catch (error) {
+    console.error(
+      JSON.stringify({
+        ts: new Date().toISOString(),
+        level: "error",
+        requestId: req._requestMeta?.id || "unknown",
+        method: req.method,
+        path: req._pathname || "unknown",
+        message: error?.message || "Unhandled error",
+        stack: error?.stack || null
+      })
+    );
+
+    return sendJson(
+      req,
+      res,
+      500,
+      isProd
+        ? { ok: false, error: "Internal server error", requestId: req._requestMeta?.id }
+        : { ok: false, error: error?.message || "Internal server error", requestId: req._requestMeta?.id }
+    );
+  }
 });
 
 initPostgresIfEnabled().finally(() => {

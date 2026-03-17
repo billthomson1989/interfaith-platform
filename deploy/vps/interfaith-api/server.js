@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const morgan = require('morgan');
 const crypto = require('crypto');
 
 const app = express();
@@ -10,8 +9,33 @@ const isProd = (process.env.NODE_ENV || 'development') === 'production';
 const adminUserIds = new Set((process.env.ADMIN_USER_IDS || 'demo-admin,ops').split(',').map((s) => s.trim()).filter(Boolean));
 
 app.use(express.json());
-app.use(morgan('tiny'));
 app.use(cors({ origin: true, credentials: true }));
+
+app.use((req, res, next) => {
+  const requestId = crypto.randomUUID();
+  const startedAt = Date.now();
+  req.requestId = requestId;
+  res.setHeader('X-Request-Id', requestId);
+
+  res.on('finish', () => {
+    const durationMs = Date.now() - startedAt;
+    const xff = req.headers['x-forwarded-for'];
+    const ip = (typeof xff === 'string' && xff.trim()) ? xff.split(',')[0].trim() : (req.socket?.remoteAddress || 'unknown');
+
+    console.log(JSON.stringify({
+      ts: new Date().toISOString(),
+      requestId,
+      method: req.method,
+      path: req.originalUrl,
+      status: res.statusCode,
+      durationMs,
+      ip,
+      userId: req.authUserId || null
+    }));
+  });
+
+  next();
+});
 
 const queueByUser = new Map();
 const reports = [];
@@ -75,9 +99,11 @@ const requireAdminSession = (req, res) => {
     return null;
   }
   if (!adminUserIds.has(session.userId)) {
+    req.authUserId = session.userId;
     res.status(403).json({ ok: false, error: 'Admin role required', userId: session.userId });
     return null;
   }
+  req.authUserId = session.userId;
   return session;
 };
 
@@ -164,6 +190,18 @@ app.get(route('/health'), (_req, res) => {
   });
 });
 
+app.get(route('/ready'), (_req, res) => {
+  const needsPostgres = process.env.USE_POSTGRES === 'true';
+  const postgresReady = !needsPostgres; // deploy shim is in-memory
+  const ok = postgresReady;
+  res.status(ok ? 200 : 503).json({
+    ok,
+    service: 'interfaith-api',
+    checks: { postgres: { required: needsPostgres, ok: postgresReady } },
+    ts: new Date().toISOString()
+  });
+});
+
 app.post(route('/auth/login'), (req, res) => {
   const rl = checkRateLimit({ key: `auth_login:${getClientIp(req)}`, limit: 15, windowMs: 60_000 });
   if (!rl.allowed) return res.status(429).json({ ok: false, error: 'Rate limit exceeded', retryAfterSec: rl.retryAfterSec });
@@ -181,6 +219,7 @@ app.get(route('/me'), (req, res) => {
   const token = cookies.interfaith_session;
   const session = token ? authSessions.get(token) : null;
   if (!session) return res.status(401).json({ ok: false, error: 'Not authenticated' });
+  req.authUserId = session.userId;
   res.json({ ok: true, userId: session.userId, sessionCreatedAt: session.createdAt });
 });
 
@@ -333,6 +372,24 @@ app.get(route('/citation/search'), (req, res) => {
     .map(({ item }) => ({ ...item, canonicalKey: item.canonical_key }));
 
   res.json({ ok: true, count: results.length, q: q || '', tradition: tradition || null, language: language || null, source: 'json', results });
+});
+
+app.use((err, req, res, _next) => {
+  console.error(JSON.stringify({
+    ts: new Date().toISOString(),
+    level: 'error',
+    requestId: req.requestId || null,
+    method: req.method,
+    path: req.originalUrl,
+    message: err?.message || 'Unhandled error',
+    stack: err?.stack || null
+  }));
+
+  const prod = (process.env.NODE_ENV || 'development') === 'production';
+  res.status(500).json(prod
+    ? { ok: false, error: 'Internal server error', requestId: req.requestId || null }
+    : { ok: false, error: err?.message || 'Internal server error', requestId: req.requestId || null }
+  );
 });
 
 app.listen(PORT, '127.0.0.1', () => console.log('interfaith-api listening on 127.0.0.1:' + PORT));
