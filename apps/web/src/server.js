@@ -176,7 +176,11 @@ const html = `<!doctype html>
           headers: { 'Content-Type': 'application/json' },
           ...options
         });
-        return res.json();
+        const data = await res.json();
+        if (!res.ok) {
+          return { ok: false, status: res.status, ...(data || {}) };
+        }
+        return data;
       }
 
       function currentUserId() {
@@ -269,6 +273,16 @@ const html = `<!doctype html>
         const status = encodeURIComponent(document.getElementById('reportStatusFilter').value);
         const data = await jfetch('/reports' + (status ? ('?status=' + status) : ''));
 
+        if (!data.ok) {
+          const msg = data.status === 401
+            ? 'Not logged in as admin (401).'
+            : data.status === 403
+              ? 'Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').'
+              : 'Failed to load reports (' + (data.status || 'error') + '): ' + (data.error || 'unknown');
+          document.getElementById('reportsOut').textContent = msg;
+          return;
+        }
+
         if (!data.reports || !data.reports.length) {
           document.getElementById('reportsOut').textContent = 'No reports found.';
           return;
@@ -288,6 +302,15 @@ const html = `<!doctype html>
         };
 
         const data = await jfetch('/reports/status', { method: 'POST', body: JSON.stringify(payload) });
+        if (!data.ok) {
+          const msg = data.status === 401
+            ? 'Not logged in as admin (401).'
+            : data.status === 403
+              ? 'Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').'
+              : 'Failed to update report (' + (data.status || 'error') + '): ' + (data.error || 'unknown');
+          document.getElementById('reportAdminOut').textContent = msg;
+          return;
+        }
         document.getElementById('reportAdminOut').textContent = JSON.stringify(data, null, 2);
       }
 

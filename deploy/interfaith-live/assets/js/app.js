@@ -13,7 +13,11 @@ async function jf(path, opts = {}) {
         headers: { "Content-Type": "application/json" },
         ...opts
       });
-      return await res.json();
+      const data = await res.json();
+      if (!res.ok) {
+        return { ok: false, status: res.status, ...(data || {}) };
+      }
+      return data;
     } catch (err) {
       lastErr = err;
     }
@@ -125,6 +129,16 @@ async function loadReports() {
   const status = document.getElementById("reportStatusFilter").value;
   const d = await jf("/reports" + (status ? `?status=${encodeURIComponent(status)}` : ""));
 
+  if (!d.ok) {
+    const msg = d.status === 401
+      ? "Not logged in as admin (401)."
+      : d.status === 403
+        ? `Logged in user is not admin (403: ${d.userId || "unknown"}).`
+        : `Failed to load reports (${d.status || "error"}): ${d.error || "unknown"}`;
+    document.getElementById("reportsOut").textContent = msg;
+    return;
+  }
+
   if (!d.reports || !d.reports.length) {
     document.getElementById("reportsOut").textContent = "No reports found.";
     return;
@@ -144,6 +158,15 @@ async function updateReportStatus() {
   };
 
   const d = await jf("/reports/status", { method: "POST", body: JSON.stringify(payload) });
+  if (!d.ok) {
+    const msg = d.status === 401
+      ? "Not logged in as admin (401)."
+      : d.status === 403
+        ? `Logged in user is not admin (403: ${d.userId || "unknown"}).`
+        : `Failed to update report (${d.status || "error"}): ${d.error || "unknown"}`;
+    document.getElementById("reportAdminOut").textContent = msg;
+    return;
+  }
   document.getElementById("reportAdminOut").textContent = JSON.stringify(d, null, 2);
 }
 

@@ -10,7 +10,10 @@
     "test:citations": "node scripts/test-citation-search.mjs",
     "test:sessions": "node scripts/test-session-lifecycle.mjs",
     "test:auth": "node scripts/test-auth-hardening.mjs",
-    "test:moderation": "node scripts/test-moderation-workflow.mjs"
+    "test:moderation": "node scripts/test-moderation-workflow.mjs",
+    "backup:moderation": "node scripts/backup-moderation-reports.mjs",
+    "restore:moderation": "node scripts/restore-moderation-reports.mjs",
+    "smoke:prod": "node scripts/smoke-production.mjs"
   },
   "dependencies": {
     "pg": "^8.12.0"

@@ -12,6 +12,14 @@ mkdir -p "$TARGET_DIR"
 cp "$SRC_DIR/server.js" "$TARGET_DIR/server.js"
 cp "$SRC_DIR/package.json" "$TARGET_DIR/package.json"
 
+COMMIT_SHA="$(git -C "$REPO_ROOT" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+BUILD_TIME="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+cat > "$TARGET_DIR/.build-meta.json" <<EOF
+{"commitSha":"$COMMIT_SHA","buildTime":"$BUILD_TIME"}
+EOF
+
+echo "[deploy] build meta: commit=$COMMIT_SHA buildTime=$BUILD_TIME"
+
 cd "$TARGET_DIR"
 npm install --omit=dev
 

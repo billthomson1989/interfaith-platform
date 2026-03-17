@@ -145,6 +145,15 @@ npm --workspace @interfaith/api run test:citations
 # Seed citations into postgres
 npm --workspace @interfaith/api run seed:citations
 
+# Backup moderation reports (postgres)
+npm --workspace @interfaith/api run backup:moderation
+
+# Restore moderation reports (postgres)
+IN=/path/to/moderation-reports-backup.json npm --workspace @interfaith/api run restore:moderation
+
+# Production smoke (ready/version/admin gate/citation)
+npm --workspace @interfaith/api run smoke:prod
+
 # Full browser smoke
 npm --workspace @interfaith/web run smoke:e2e
 ```

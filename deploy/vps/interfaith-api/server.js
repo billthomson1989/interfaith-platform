@@ -1,14 +1,33 @@
 const express = require('express');
 const cors = require('cors');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 
 const app = express();
 const PORT = process.env.PORT || 8787;
 const BASE = '/api';
 const isProd = (process.env.NODE_ENV || 'development') === 'production';
-const commitSha = process.env.COMMIT_SHA || process.env.GIT_COMMIT || 'dev';
-const buildTime = process.env.BUILD_TIME || null;
 const startedAt = new Date().toISOString();
+
+const loadBuildMeta = () => {
+  try {
+    const p = path.join(__dirname, '.build-meta.json');
+    const raw = fs.readFileSync(p, 'utf8');
+    const parsed = JSON.parse(raw);
+    return {
+      commitSha: parsed.commitSha || process.env.COMMIT_SHA || process.env.GIT_COMMIT || 'dev',
+      buildTime: parsed.buildTime || process.env.BUILD_TIME || null
+    };
+  } catch {
+    return {
+      commitSha: process.env.COMMIT_SHA || process.env.GIT_COMMIT || 'dev',
+      buildTime: process.env.BUILD_TIME || null
+    };
+  }
+};
+
+const { commitSha, buildTime } = loadBuildMeta();
 const adminUserIds = new Set((process.env.ADMIN_USER_IDS || 'demo-admin,ops').split(',').map((s) => s.trim()).filter(Boolean));
 const allowedOrigins = (process.env.CORS_ORIGINS || 'https://interfaith.billthomson.elementfx.com,http://localhost:3000,http://127.0.0.1:3000')
   .split(',')
