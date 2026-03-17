@@ -699,6 +699,10 @@ const server = http.createServer(async (req, res) => {
       targetUserId: body.targetUserId || null,
       category: body.category || "other",
       notes: body.notes || "",
+      status: "new",
+      reviewerNote: null,
+      reviewedBy: null,
+      reviewedAt: null,
       createdAt: new Date().toISOString()
     };
 
@@ -716,11 +720,40 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/reports") {
+    const status = (url.searchParams.get("status") || "").toLowerCase().trim();
+    const validStates = new Set(["new", "triaged", "actioned", "resolved"]);
+    const filtered = !status || !validStates.has(status)
+      ? moderationReports
+      : moderationReports.filter((r) => (r.status || "new") === status);
+
     return sendJson(req, res, 200, {
       ok: true,
-      count: moderationReports.length,
-      reports: moderationReports.slice(-50)
+      count: filtered.length,
+      reports: filtered.slice(-50)
     });
+  }
+
+  if (req.method === "POST" && url.pathname === "/reports/status") {
+    const body = await readBody(req);
+    const reportId = (body.reportId || "").toString();
+    const status = (body.status || "").toString().toLowerCase();
+    const validStates = new Set(["new", "triaged", "actioned", "resolved"]);
+
+    if (!reportId || !validStates.has(status)) {
+      return sendJson(req, res, 400, { ok: false, error: "Invalid reportId or status" });
+    }
+
+    const report = moderationReports.find((r) => r.id === reportId);
+    if (!report) {
+      return sendJson(req, res, 404, { ok: false, error: "Report not found" });
+    }
+
+    report.status = status;
+    report.reviewerNote = (body.reviewerNote || "").toString() || null;
+    report.reviewedBy = (body.reviewedBy || "moderator").toString();
+    report.reviewedAt = new Date().toISOString();
+
+    return sendJson(req, res, 200, { ok: true, report });
   }
 
   return sendJson(req, res, 404, { ok: false, error: "Not found" });

@@ -251,14 +251,44 @@ app.post(route('/reports'), (req, res) => {
 
   const body = req.body || {};
   const report = {
-    id: reports.length + 1,
+    id: crypto.randomUUID(),
     reporterUserId: body.reporterUserId || 'demo-user',
     targetUserId: body.targetUserId || null,
     category: body.category || 'other',
     notes: body.notes || '',
+    status: 'new',
+    reviewerNote: null,
+    reviewedBy: null,
+    reviewedAt: null,
     createdAt: new Date().toISOString()
   };
   reports.push(report);
+  res.json({ ok: true, report });
+});
+
+app.get(route('/reports'), (req, res) => {
+  const status = String(req.query.status || '').toLowerCase().trim();
+  const validStates = new Set(['new', 'triaged', 'actioned', 'resolved']);
+  const filtered = !status || !validStates.has(status) ? reports : reports.filter((r) => (r.status || 'new') === status);
+  res.json({ ok: true, count: filtered.length, reports: filtered.slice(-50) });
+});
+
+app.post(route('/reports/status'), (req, res) => {
+  const body = req.body || {};
+  const reportId = String(body.reportId || '');
+  const status = String(body.status || '').toLowerCase();
+  const validStates = new Set(['new', 'triaged', 'actioned', 'resolved']);
+
+  if (!reportId || !validStates.has(status)) return res.status(400).json({ ok: false, error: 'Invalid reportId or status' });
+
+  const report = reports.find((r) => r.id === reportId);
+  if (!report) return res.status(404).json({ ok: false, error: 'Report not found' });
+
+  report.status = status;
+  report.reviewerNote = String(body.reviewerNote || '') || null;
+  report.reviewedBy = String(body.reviewedBy || 'moderator');
+  report.reviewedAt = new Date().toISOString();
+
   res.json({ ok: true, report });
 });
 
