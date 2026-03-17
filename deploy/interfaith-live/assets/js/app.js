@@ -24,9 +24,32 @@ async function jf(path, opts = {}) {
 
 const uid = () => document.getElementById("userId").value.trim() || "demo-user";
 
+const ADMIN_IDS = new Set(["demo-admin", "ops"]);
+
+async function refreshAdminBadge() {
+  const el = document.getElementById("adminBadge");
+  if (!el) return;
+
+  try {
+    const d = await jf("/me");
+    if (!d || !d.ok) {
+      el.textContent = "Admin status: not logged in";
+      return;
+    }
+
+    const isAdmin = ADMIN_IDS.has(d.userId);
+    el.textContent = isAdmin
+      ? `Admin status: ✅ ${d.userId} (admin)`
+      : `Admin status: ⚠️ ${d.userId} (not admin)`;
+  } catch {
+    el.textContent = "Admin status: not logged in";
+  }
+}
+
 async function login() {
   const d = await jf("/auth/login", { method: "POST", body: JSON.stringify({ userId: uid() }) });
   document.getElementById("authOut").textContent = JSON.stringify(d, null, 2);
+  await refreshAdminBadge();
 }
 
 async function whoami() {
@@ -135,3 +158,5 @@ document.getElementById("btnReport").addEventListener("click", reportIt);
 document.getElementById("btnSearchCitations").addEventListener("click", searchCitations);
 document.getElementById("btnLoadReports").addEventListener("click", loadReports);
 document.getElementById("btnUpdateReportStatus").addEventListener("click", updateReportStatus);
+
+refreshAdminBadge();

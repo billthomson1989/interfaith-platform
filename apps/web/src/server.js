@@ -27,6 +27,7 @@ const html = `<!doctype html>
 
     <div class="card">
       <h3>Auth (stub)</h3>
+      <p id="adminBadge" class="muted">Admin status: unknown</p>
       <div class="row">
         <div>
           <label>User ID</label>
@@ -182,9 +183,32 @@ const html = `<!doctype html>
         return document.getElementById('userId').value.trim() || 'demo-user';
       }
 
+      const ADMIN_IDS = new Set(['demo-admin', 'ops']);
+
+      async function refreshAdminBadge() {
+        const el = document.getElementById('adminBadge');
+        if (!el) return;
+
+        try {
+          const d = await jfetch('/me');
+          if (!d || !d.ok) {
+            el.textContent = 'Admin status: not logged in';
+            return;
+          }
+
+          const isAdmin = ADMIN_IDS.has(d.userId);
+          el.textContent = isAdmin
+            ? 'Admin status: ✅ ' + d.userId + ' (admin)'
+            : 'Admin status: ⚠️ ' + d.userId + ' (not admin)';
+        } catch {
+          el.textContent = 'Admin status: not logged in';
+        }
+      }
+
       async function login() {
         const data = await jfetch('/auth/login', { method: 'POST', body: JSON.stringify({ userId: currentUserId() }) });
         document.getElementById('authOut').textContent = JSON.stringify(data, null, 2);
+        await refreshAdminBadge();
       }
 
       async function me() {
@@ -287,6 +311,8 @@ const html = `<!doctype html>
           })
           .join('');
       }
+
+      refreshAdminBadge();
     </script>
   </body>
 </html>`;
