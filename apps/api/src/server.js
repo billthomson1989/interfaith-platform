@@ -106,36 +106,50 @@ const searchCitationsInMemory = ({ q, tradition, language, limit }) => {
     .map(({ item }) => ({ ...item, canonicalKey: item.canonical_key }));
 };
 
-const canMatch = (a, b) => a.language === b.language && a.mode === b.mode;
+const modeCompatibility = new Set(["voice_only", "voice_then_video"]);
+
+const resolveMatchedMode = (a, b) => {
+  const values = [a, b].map((v) => (v || "").toString());
+  if (values[0] === values[1]) return values[0];
+  if (values.every((v) => modeCompatibility.has(v))) return "voice_then_video";
+  return null;
+};
+
+const canMatch = (a, b) => {
+  const sameLanguage = (a.language || "").toLowerCase() === (b.language || "").toLowerCase();
+  const matchedMode = resolveMatchedMode(a.mode, b.mode);
+  return sameLanguage && Boolean(matchedMode);
+};
 
 const tryMatchForUser = (newEntry) => {
-  for (const candidate of queueByUser.values()) {
-    if (candidate.userId === newEntry.userId) continue;
-    if (!canMatch(newEntry, candidate)) continue;
+  const compatibleCandidates = [...queueByUser.values()]
+    .filter((candidate) => candidate.userId !== newEntry.userId)
+    .filter((candidate) => canMatch(newEntry, candidate))
+    .sort((a, b) => new Date(a.queuedAt).getTime() - new Date(b.queuedAt).getTime());
 
-    const sessionId = crypto.randomUUID();
-    const now = new Date().toISOString();
-    const participants = [newEntry.userId, candidate.userId].sort();
+  const candidate = compatibleCandidates[0];
+  if (!candidate) return null;
 
-    const session = {
-      sessionId,
-      state: "active",
-      mode: newEntry.mode,
-      language: newEntry.language,
-      participants,
-      matchedAt: now,
-      startedAt: now,
-      endedAt: null,
-      endedReason: null
-    };
+  const sessionId = crypto.randomUUID();
+  const now = new Date().toISOString();
+  const participants = [newEntry.userId, candidate.userId].sort();
 
-    dialogueSessions.set(sessionId, session);
-    queueByUser.delete(newEntry.userId);
-    queueByUser.delete(candidate.userId);
-    return session;
-  }
+  const session = {
+    sessionId,
+    state: "active",
+    mode: resolveMatchedMode(newEntry.mode, candidate.mode) || newEntry.mode,
+    language: (newEntry.language || "en").toLowerCase(),
+    participants,
+    matchedAt: now,
+    startedAt: now,
+    endedAt: null,
+    endedReason: null
+  };
 
-  return null;
+  dialogueSessions.set(sessionId, session);
+  queueByUser.delete(newEntry.userId);
+  queueByUser.delete(candidate.userId);
+  return session;
 };
 
 const findSessionByUser = (userId) => {
@@ -145,6 +159,42 @@ const findSessionByUser = (userId) => {
     }
   }
   return null;
+};
+
+const hydrateRuntimeFromPostgres = async () => {
+  if (!pgClient) return;
+
+  const queueRows = await pgClient.query(`select user_id, queue_id, mode, language, intent_tags, queued_at from queue_entries`);
+  for (const row of queueRows.rows) {
+    queueByUser.set(row.user_id, {
+      queueId: row.queue_id,
+      userId: row.user_id,
+      mode: row.mode,
+      language: row.language,
+      intentTags: Array.isArray(row.intent_tags) ? row.intent_tags : [],
+      queuedAt: new Date(row.queued_at).toISOString()
+    });
+  }
+
+  const sessionRows = await pgClient.query(`
+    select session_id, state, mode, language, participants, matched_at, started_at, ended_at, ended_reason
+    from dialogue_sessions
+  `);
+  for (const row of sessionRows.rows) {
+    dialogueSessions.set(row.session_id, {
+      sessionId: row.session_id,
+      state: row.state,
+      mode: row.mode,
+      language: row.language,
+      participants: Array.isArray(row.participants) ? row.participants : [],
+      matchedAt: row.matched_at ? new Date(row.matched_at).toISOString() : null,
+      startedAt: row.started_at ? new Date(row.started_at).toISOString() : null,
+      endedAt: row.ended_at ? new Date(row.ended_at).toISOString() : null,
+      endedReason: row.ended_reason || null
+    });
+  }
+
+  console.log(`[api] hydrated runtime state from postgres: queue=${queueByUser.size}, sessions=${dialogueSessions.size}`);
 };
 
 const initPostgresIfEnabled = async () => {
@@ -227,6 +277,7 @@ const initPostgresIfEnabled = async () => {
       console.log(`[api] seeded ${citations.length} citations into postgres`);
     }
 
+    await hydrateRuntimeFromPostgres();
     console.log("[api] postgres connected");
   } catch (error) {
     console.warn("[api] postgres init failed; falling back to in-memory", error.message);
@@ -404,8 +455,8 @@ const server = http.createServer(async (req, res) => {
     const entry = {
       queueId: crypto.randomUUID(),
       userId,
-      mode: body.modePreference || "voice_only",
-      language: body.language || "en",
+      mode: (body.modePreference || body.mode || "voice_only").toString(),
+      language: (body.language || "en").toString().toLowerCase(),
       intentTags: Array.isArray(body.intentTags) ? body.intentTags : [],
       queuedAt: new Date().toISOString()
     };
