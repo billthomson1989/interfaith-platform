@@ -118,6 +118,20 @@ const html = `<!doctype html>
         </div>
       </div>
       <div id="reportsOut" class="result">No reports loaded.</div>
+
+      <h4 style="margin-top:1rem; margin-bottom:.4rem;">Report detail</h4>
+      <p class="muted" style="margin-top:0;">Select a report from the list or enter an ID to load history timeline.</p>
+      <div class="row">
+        <div>
+          <label>Detail report ID</label>
+          <input id="detailReportId" placeholder="report-id" />
+        </div>
+        <div style="align-self:flex-end;">
+          <button onclick="loadReportDetail()">Load detail</button>
+        </div>
+      </div>
+      <div id="reportDetailOut" class="result">No report detail loaded.</div>
+
       <div class="row">
         <div>
           <label>Report ID</label>
@@ -188,6 +202,22 @@ const html = `<!doctype html>
       }
 
       const ADMIN_IDS = new Set(['demo-admin', 'ops']);
+      let reportsById = new Map();
+
+      function escapeHtml(value) {
+        return String(value || '')
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;')
+          .replaceAll('"', '&quot;')
+          .replaceAll("'", '&#39;');
+      }
+
+      function fmtDate(iso) {
+        if (!iso) return 'n/a';
+        const d = new Date(iso);
+        return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+      }
 
       async function refreshAdminBadge() {
         const el = document.getElementById('adminBadge');
@@ -274,6 +304,7 @@ const html = `<!doctype html>
         const data = await jfetch('/reports' + (status ? ('?status=' + status) : ''));
 
         if (!data.ok) {
+          reportsById = new Map();
           const msg = data.status === 401
             ? 'Not logged in as admin (401).'
             : data.status === 403
@@ -284,13 +315,68 @@ const html = `<!doctype html>
         }
 
         if (!data.reports || !data.reports.length) {
+          reportsById = new Map();
           document.getElementById('reportsOut').textContent = 'No reports found.';
           return;
         }
 
+        reportsById = new Map(data.reports.map((r) => [r.id, r]));
+
         document.getElementById('reportsOut').innerHTML = data.reports
-          .map((r) => '<div style="margin-bottom:.6rem;"><strong>' + r.id + '</strong> · <em>' + (r.status || 'new') + '</em><br/>' + (r.category || '') + ' · ' + (r.reporterUserId || '') + '<br/><span class="muted">' + (r.notes || '') + '</span></div>')
+          .map((r) => '<div style="margin-bottom:.75rem;">'
+            + '<strong>' + escapeHtml(r.id) + '</strong> · <em>' + escapeHtml(r.status || 'new') + '</em>'
+            + '<br/>' + escapeHtml(r.category || '') + ' · ' + escapeHtml(r.reporterUserId || '')
+            + '<br/><span class="muted">' + escapeHtml(r.notes || '') + '</span>'
+            + '<br/><button onclick="loadReportDetail(\'' + escapeHtml(r.id) + '\')" style="margin-top:.35rem;">View timeline</button>'
+            + '</div>')
           .join('');
+      }
+
+      async function loadReportDetail(reportIdFromList) {
+        const input = document.getElementById('detailReportId');
+        const reportId = (reportIdFromList || input.value || '').trim();
+        if (!reportId) {
+          document.getElementById('reportDetailOut').textContent = 'Enter a report ID first.';
+          return;
+        }
+
+        input.value = reportId;
+        document.getElementById('reviewReportId').value = reportId;
+
+        const summary = reportsById.get(reportId);
+        const data = await jfetch('/reports/' + encodeURIComponent(reportId) + '/history');
+
+        if (!data.ok) {
+          const msg = data.status === 401
+            ? 'Not logged in as admin (401).'
+            : data.status === 403
+              ? 'Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').'
+              : data.status === 404
+                ? 'Report not found (404).'
+                : 'Failed to load report history (' + (data.status || 'error') + '): ' + (data.error || 'unknown');
+          document.getElementById('reportDetailOut').textContent = msg;
+          return;
+        }
+
+        const header = summary
+          ? '<div><strong>' + escapeHtml(summary.id) + '</strong> · <em>' + escapeHtml(summary.status || 'new') + '</em>'
+            + '<br/><span class="muted">Category: ' + escapeHtml(summary.category || 'other') + ' · Reporter: ' + escapeHtml(summary.reporterUserId || 'unknown') + '</span></div>'
+          : '<div><strong>' + escapeHtml(reportId) + '</strong></div>';
+
+        const timeline = (data.events || []).length
+          ? data.events.map((evt) => {
+              const statusText = evt.fromStatus || evt.toStatus
+                ? ' [' + (evt.fromStatus || 'n/a') + ' → ' + (evt.toStatus || 'n/a') + ']'
+                : '';
+              return '<li style="margin-bottom:.5rem;">'
+                + '<strong>' + escapeHtml(evt.eventType || 'event') + '</strong>' + escapeHtml(statusText)
+                + '<br/><span class="muted">' + escapeHtml(fmtDate(evt.createdAt)) + ' · ' + escapeHtml(evt.actorUserId || 'system') + '</span>'
+                + (evt.note ? '<br/>' + escapeHtml(evt.note) : '')
+                + '</li>';
+            }).join('')
+          : '<li>No history events found.</li>';
+
+        document.getElementById('reportDetailOut').innerHTML = header + '<hr style="border:none;border-top:1px solid #eee; margin:.75rem 0;"/><ol style="padding-left:1.2rem; margin:0;">' + timeline + '</ol>';
       }
 
       async function updateReportStatus() {
@@ -312,6 +398,11 @@ const html = `<!doctype html>
           return;
         }
         document.getElementById('reportAdminOut').textContent = JSON.stringify(data, null, 2);
+
+        const currentDetailId = document.getElementById('detailReportId').value.trim();
+        if (currentDetailId && data.report && data.report.id === currentDetailId) {
+          await loadReportDetail(currentDetailId);
+        }
       }
 
       async function searchCitations() {
