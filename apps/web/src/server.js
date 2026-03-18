@@ -240,6 +240,28 @@ const html = `<!doctype html>
         return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
       }
 
+      function statusColor(status) {
+        switch ((status || '').toLowerCase()) {
+          case 'new': return '#6b7280';
+          case 'triaged': return '#2563eb';
+          case 'actioned': return '#b45309';
+          case 'resolved': return '#15803d';
+          default: return '#6b7280';
+        }
+      }
+
+      function statusChip(status) {
+        const s = (status || 'new').toLowerCase();
+        return '<span style="display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:.78rem;font-weight:600;color:#fff;background:' + statusColor(s) + ';">' + escapeHtml(s) + '</span>';
+      }
+
+      function eventTypeLabel(eventType) {
+        const normalized = (eventType || '').toLowerCase();
+        if (normalized === 'report_created') return 'Report created';
+        if (normalized === 'status_changed') return 'Status changed';
+        return normalized ? normalized.replaceAll('_', ' ') : 'Event';
+      }
+
       async function refreshAdminBadge() {
         const el = document.getElementById('adminBadge');
         if (!el) return;
@@ -345,7 +367,7 @@ const html = `<!doctype html>
 
         document.getElementById('reportsOut').innerHTML = data.reports
           .map((r) => '<div style="margin-bottom:.75rem;">'
-            + '<strong>' + escapeHtml(r.id) + '</strong> · <em>' + escapeHtml(r.status || 'new') + '</em>'
+            + '<strong>' + escapeHtml(r.id) + '</strong> ' + statusChip(r.status || 'new')
             + '<br/>' + escapeHtml(r.category || '') + ' · ' + escapeHtml(r.reporterUserId || '')
             + '<br/><span class="muted">' + escapeHtml(r.notes || '') + '</span>'
             + '<br/><button onclick="loadReportDetail(\'' + escapeHtml(r.id) + '\')" style="margin-top:.35rem;">View timeline</button>'
@@ -391,7 +413,7 @@ const html = `<!doctype html>
         }
 
         const header = summary
-          ? '<div><strong>' + escapeHtml(summary.id) + '</strong> · <em>' + escapeHtml(summary.status || 'new') + '</em>'
+          ? '<div><strong>' + escapeHtml(summary.id) + '</strong> ' + statusChip(summary.status || 'new')
             + '<br/><span class="muted">Category: ' + escapeHtml(summary.category || 'other') + ' · Reporter: ' + escapeHtml(summary.reporterUserId || 'unknown') + '</span>'
             + '<br/><span class="muted">Last review: ' + escapeHtml(summary.reviewedBy || 'n/a') + ' @ ' + escapeHtml(fmtDate(summary.reviewedAt)) + '</span>'
             + (summary.reviewerNote ? '<br/><span class="muted">Reviewer note: ' + escapeHtml(summary.reviewerNote) + '</span>' : '')
@@ -400,11 +422,13 @@ const html = `<!doctype html>
 
         const timeline = (data.events || []).length
           ? data.events.map((evt) => {
-              const statusText = evt.fromStatus || evt.toStatus
-                ? ' [' + (evt.fromStatus || 'n/a') + ' → ' + (evt.toStatus || 'n/a') + ']'
+              const from = (evt.fromStatus || '').toLowerCase();
+              const to = (evt.toStatus || '').toLowerCase();
+              const statusText = (from || to)
+                ? '<span class="muted" style="margin-left:.35rem;">(' + (from ? statusChip(from) : '<span class="muted">n/a</span>') + ' → ' + (to ? statusChip(to) : '<span class="muted">n/a</span>') + ')</span>'
                 : '';
-              return '<li style="margin-bottom:.5rem;">'
-                + '<strong>' + escapeHtml(evt.eventType || 'event') + '</strong>' + escapeHtml(statusText)
+              return '<li style="margin-bottom:.6rem;">'
+                + '<strong>' + escapeHtml(eventTypeLabel(evt.eventType)) + '</strong>' + statusText
                 + '<br/><span class="muted">' + escapeHtml(fmtDate(evt.createdAt)) + ' · ' + escapeHtml(evt.actorUserId || 'system') + '</span>'
                 + (evt.note ? '<br/>' + escapeHtml(evt.note) : '')
                 + '</li>';
