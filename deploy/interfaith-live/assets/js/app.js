@@ -88,6 +88,17 @@ async function refreshAdminBadge() {
   }
 }
 
+async function loadVersion() {
+  const d = await jf("/version");
+  if (!d.ok) {
+    document.getElementById("versionOut").textContent = "Failed to load build metadata.";
+    return;
+  }
+  const v = d.version || {};
+  document.getElementById("versionOut").innerHTML =
+    `<pre><strong>API</strong> · ${escapeHtml(d.service || "interfaith-api")}\nCommit: ${escapeHtml(v.commitSha || "unknown")}\nBuild: ${escapeHtml(fmtDate(v.buildTime))}\nStarted: ${escapeHtml(fmtDate(v.startedAt))}</pre>`;
+}
+
 async function login() {
   const d = await jf("/auth/login", { method: "POST", body: JSON.stringify({ userId: uid() }) });
   document.getElementById("authOut").textContent = JSON.stringify(d, null, 2);
@@ -321,3 +332,4 @@ document.getElementById("btnUpdateReportStatus").addEventListener("click", updat
 window.loadReportDetail = loadReportDetail;
 
 refreshAdminBadge();
+loadVersion();

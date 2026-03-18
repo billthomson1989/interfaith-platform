@@ -202,6 +202,11 @@ const html = `<!doctype html>
       <div id="citationOut" class="result">No citation search yet.</div>
     </div>
 
+    <div class="card">
+      <h3>Build info</h3>
+      <div id="versionOut" class="result">Loading build metadata…</div>
+    </div>
+
     <script>
       const API = ${JSON.stringify(apiUrl)};
 
@@ -280,6 +285,21 @@ const html = `<!doctype html>
         } catch {
           el.textContent = 'Admin status: not logged in';
         }
+      }
+
+      async function loadVersion() {
+        const data = await jfetch('/version');
+        if (!data.ok) {
+          document.getElementById('versionOut').textContent = 'Failed to load build metadata.';
+          return;
+        }
+
+        const v = data.version || {};
+        document.getElementById('versionOut').innerHTML =
+          '<strong>API</strong> · ' + escapeHtml(data.service || 'interfaith-api')
+          + '<br/><span class="muted">Commit: ' + escapeHtml(v.commitSha || 'unknown') + '</span>'
+          + '<br/><span class="muted">Build: ' + escapeHtml(fmtDate(v.buildTime)) + '</span>'
+          + '<br/><span class="muted">Started: ' + escapeHtml(fmtDate(v.startedAt)) + '</span>';
       }
 
       async function login() {
@@ -520,6 +540,7 @@ const html = `<!doctype html>
       }
 
       refreshAdminBadge();
+      loadVersion();
     </script>
   </body>
 </html>`;

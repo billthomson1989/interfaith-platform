@@ -359,18 +359,23 @@ const logRequest = (req, statusCode, payload) => {
   const durationMs = Date.now() - meta.startedAt;
   const ip = getClientIp(req);
   const pathOnly = req._pathname || new URL(req.url || "/", `http://${req.headers.host}`).pathname;
+  const level = statusCode >= 500 ? "error" : statusCode >= 400 ? "warn" : "info";
 
   console.log(
     JSON.stringify({
       ts: new Date().toISOString(),
+      level,
       requestId: meta.id,
       method: req.method,
       path: pathOnly,
       status: statusCode,
       durationMs,
       ip,
+      userAgent: req.headers["user-agent"] || null,
+      referer: req.headers.referer || req.headers.referrer || null,
       userId: req._authUserId || null,
-      ok: typeof payload?.ok === "boolean" ? payload.ok : undefined
+      ok: typeof payload?.ok === "boolean" ? payload.ok : undefined,
+      error: payload?.ok === false ? payload?.error || null : null
     })
   );
 };
@@ -1090,7 +1095,7 @@ const server = http.createServer(async (req, res) => {
         method: req.method,
         path: req._pathname || "unknown",
         message: error?.message || "Unhandled error",
-        stack: error?.stack || null
+        ...(isProd ? {} : { stack: error?.stack || null })
       })
     );
 

@@ -47,5 +47,24 @@ function must(cond, msg) {
   const reports = await j("GET", "/reports", undefined, adminCookie);
   must(reports.res.status === 200, `admin reports expected 200, got ${reports.res.status}`);
 
+  const created = await j("POST", "/reports", {
+    reporterUserId: adminUser,
+    category: "other",
+    notes: "smoke-production moderation report"
+  }, adminCookie);
+  must(created.res.status === 200 && created.data?.report?.id, `report create failed: ${created.res.status} ${created.text}`);
+
+  const reportId = created.data.report.id;
+  const updated = await j("POST", "/reports/status", {
+    reportId,
+    status: "triaged",
+    reviewerNote: "smoke triage",
+    reviewedBy: adminUser
+  }, adminCookie);
+  must(updated.res.status === 200 && updated.data?.report?.status === "triaged", `report status failed: ${updated.res.status} ${updated.text}`);
+
+  const history = await j("GET", `/reports/${reportId}/history`, undefined, adminCookie);
+  must(history.res.status === 200 && Array.isArray(history.data?.events), `report history failed: ${history.res.status} ${history.text}`);
+
   console.log("✅ Production smoke passed");
 })();
