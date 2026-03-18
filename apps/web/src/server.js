@@ -370,7 +370,7 @@ const html = `<!doctype html>
             + '<strong>' + escapeHtml(r.id) + '</strong> ' + statusChip(r.status || 'new')
             + '<br/>' + escapeHtml(r.category || '') + ' · ' + escapeHtml(r.reporterUserId || '')
             + '<br/><span class="muted">' + escapeHtml(r.notes || '') + '</span>'
-            + '<br/><button onclick="loadReportDetail(\'' + escapeHtml(r.id) + '\')" style="margin-top:.35rem;">View timeline</button>'
+            + '<br/><button data-report-id="' + escapeHtml(r.id) + '" onclick="loadReportDetail(this.dataset.reportId)" style="margin-top:.35rem;">View timeline</button>'
             + '</div>')
           .join('');
       }
