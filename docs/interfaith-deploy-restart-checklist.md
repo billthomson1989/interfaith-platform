@@ -1,6 +1,6 @@
 # Interfaith Platform — Deploy/Restart Checklist
 
-Last updated: 2026-03-17
+Last updated: 2026-03-18
 Scope: deploy citation-search Phase 2.1 updates safely to live.
 
 ## Release contents
@@ -112,10 +112,21 @@ Expect:
 ### UI checks
 
 - [ ] Open frontend in normal mode:
-  - [ ] `https://interfaith.billthomson.elementfx.com/?v=fix2`
+  - [ ] `https://interfaith.billthomson.elementfx.com/?v=phase3m3`
 - [ ] Login + Who am I works
 - [ ] Queue join/status works
 - [ ] Citation search returns real results (not placeholder/fallback labels)
+- [ ] Moderation admin panel loads report list and detail timeline
+- [ ] Build info panel shows commit/build/start values
+- [ ] Diagnostics panel returns green for `health`, `ready`, `version`
+
+### Frontend hosting note (x10)
+
+- Frontend static files are served from x10 DirectAdmin (`/domains/interfaith.billthomson.elementfx.com/public_html`) and may require manual upload if relay automation fails.
+- Required deploy artifacts:
+  - `deploy/interfaith-live/index.html`
+  - `deploy/interfaith-live/assets/js/app.js`
+- After upload, hard-refresh with version param (`?v=phase3m3`) to avoid stale asset cache.
 
 ### Optional fallback check
 

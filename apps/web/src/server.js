@@ -207,6 +207,14 @@ const html = `<!doctype html>
       <div id="versionOut" class="result">Loading build metadata…</div>
     </div>
 
+    <div class="card">
+      <h3>Diagnostics</h3>
+      <div class="row">
+        <button onclick="runDiagnostics()">Run checks</button>
+      </div>
+      <div id="diagOut" class="result">No diagnostics run yet.</div>
+    </div>
+
     <script>
       const API = ${JSON.stringify(apiUrl)};
 
@@ -216,11 +224,12 @@ const html = `<!doctype html>
           headers: { 'Content-Type': 'application/json' },
           ...options
         });
+        const requestId = res.headers.get('x-request-id') || null;
         const data = await res.json();
         if (!res.ok) {
-          return { ok: false, status: res.status, ...(data || {}) };
+          return { ok: false, status: res.status, requestId, ...(data || {}) };
         }
-        return data;
+        return { ...data, requestId: data?.requestId || requestId };
       }
 
       function currentUserId() {
@@ -243,6 +252,14 @@ const html = `<!doctype html>
         if (!iso) return 'n/a';
         const d = new Date(iso);
         return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+      }
+
+      function withRequestId(message, data) {
+        return data && data.requestId ? message + ' [requestId: ' + data.requestId + ']' : message;
+      }
+
+      function formatApiError(prefix, data) {
+        return withRequestId(prefix + ' (' + (data.status || 'error') + '): ' + (data.error || 'unknown'), data);
       }
 
       function statusColor(status) {
@@ -300,6 +317,35 @@ const html = `<!doctype html>
           + '<br/><span class="muted">Commit: ' + escapeHtml(v.commitSha || 'unknown') + '</span>'
           + '<br/><span class="muted">Build: ' + escapeHtml(fmtDate(v.buildTime)) + '</span>'
           + '<br/><span class="muted">Started: ' + escapeHtml(fmtDate(v.startedAt)) + '</span>';
+      }
+
+      async function runDiagnostics() {
+        const diagOut = document.getElementById('diagOut');
+        diagOut.textContent = 'Running checks…';
+
+        const [health, ready, version] = await Promise.all([
+          jfetch('/health'),
+          jfetch('/ready'),
+          jfetch('/version')
+        ]);
+
+        const rows = [
+          ['health', health],
+          ['ready', ready],
+          ['version', version]
+        ];
+
+        diagOut.innerHTML = rows.map(([name, data]) => {
+          const ok = Boolean(data && data.ok);
+          const dot = '<span style="display:inline-block;width:.6rem;height:.6rem;border-radius:999px;background:' + (ok ? '#16a34a' : '#dc2626') + ';margin-right:.4rem;"></span>';
+          const detail = ok
+            ? (name === 'version'
+              ? 'commit=' + escapeHtml((data.version && data.version.commitSha) || 'unknown')
+              : 'ok')
+            : escapeHtml((data && data.error) || 'failed');
+          const req = data && data.requestId ? ' · requestId=' + escapeHtml(data.requestId) : '';
+          return '<div style="margin-bottom:.35rem;">' + dot + '<strong>' + name + '</strong>: ' + detail + '<span class="muted">' + req + '</span></div>';
+        }).join('');
       }
 
       async function login() {
@@ -369,10 +415,10 @@ const html = `<!doctype html>
         if (!data.ok) {
           reportsById = new Map();
           const msg = data.status === 401
-            ? 'Not logged in as admin (401).'
+            ? withRequestId('Not logged in as admin (401).', data)
             : data.status === 403
-              ? 'Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').'
-              : 'Failed to load reports (' + (data.status || 'error') + '): ' + (data.error || 'unknown');
+              ? withRequestId('Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').', data)
+              : formatApiError('Failed to load reports', data);
           document.getElementById('reportsOut').textContent = msg;
           return;
         }
@@ -422,12 +468,12 @@ const html = `<!doctype html>
 
         if (!data.ok) {
           const msg = data.status === 401
-            ? 'Not logged in as admin (401).'
+            ? withRequestId('Not logged in as admin (401).', data)
             : data.status === 403
-              ? 'Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').'
+              ? withRequestId('Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').', data)
               : data.status === 404
-                ? 'Report not found (404).'
-                : 'Failed to load report history (' + (data.status || 'error') + '): ' + (data.error || 'unknown');
+                ? withRequestId('Report not found (404).', data)
+                : formatApiError('Failed to load report history', data);
           document.getElementById('reportDetailOut').textContent = msg;
           return;
         }
@@ -464,10 +510,10 @@ const html = `<!doctype html>
 
       function buildModerationError(data) {
         return data.status === 401
-          ? 'Not logged in as admin (401).'
+          ? withRequestId('Not logged in as admin (401).', data)
           : data.status === 403
-            ? 'Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').'
-            : 'Failed to update report (' + (data.status || 'error') + '): ' + (data.error || 'unknown');
+            ? withRequestId('Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').', data)
+            : formatApiError('Failed to update report', data);
       }
 
       async function updateDetailReportStatus() {
@@ -541,6 +587,7 @@ const html = `<!doctype html>
 
       refreshAdminBadge();
       loadVersion();
+      runDiagnostics();
     </script>
   </body>
 </html>`;

@@ -13,11 +13,12 @@ async function jf(path, opts = {}) {
         headers: { "Content-Type": "application/json" },
         ...opts
       });
+      const requestId = res.headers.get("x-request-id") || null;
       const data = await res.json();
       if (!res.ok) {
-        return { ok: false, status: res.status, ...(data || {}) };
+        return { ok: false, status: res.status, requestId, ...(data || {}) };
       }
-      return data;
+      return { ...data, requestId: data?.requestId || requestId };
     } catch (err) {
       lastErr = err;
     }
@@ -44,6 +45,14 @@ function fmtDate(iso) {
   if (!iso) return "n/a";
   const d = new Date(iso);
   return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+function withRequestId(message, data) {
+  return data && data.requestId ? `${message} [requestId: ${data.requestId}]` : message;
+}
+
+function formatApiError(prefix, data) {
+  return withRequestId(`${prefix} (${data.status || "error"}): ${data.error || "unknown"}`, data);
 }
 
 function statusColor(status) {
@@ -97,6 +106,28 @@ async function loadVersion() {
   const v = d.version || {};
   document.getElementById("versionOut").innerHTML =
     `<pre><strong>API</strong> · ${escapeHtml(d.service || "interfaith-api")}\nCommit: ${escapeHtml(v.commitSha || "unknown")}\nBuild: ${escapeHtml(fmtDate(v.buildTime))}\nStarted: ${escapeHtml(fmtDate(v.startedAt))}</pre>`;
+}
+
+async function runDiagnostics() {
+  const out = document.getElementById("diagOut");
+  out.textContent = "Running checks...";
+
+  const [health, ready, version] = await Promise.all([
+    jf("/health"),
+    jf("/ready"),
+    jf("/version")
+  ]);
+
+  const rows = [["health", health], ["ready", ready], ["version", version]];
+  out.innerHTML = rows.map(([name, data]) => {
+    const ok = Boolean(data && data.ok);
+    const dot = `<span style="display:inline-block;width:.6rem;height:.6rem;border-radius:999px;background:${ok ? "#16a34a" : "#dc2626"};margin-right:.4rem;"></span>`;
+    const detail = ok
+      ? (name === "version" ? `commit=${escapeHtml((data.version && data.version.commitSha) || "unknown")}` : "ok")
+      : escapeHtml((data && data.error) || "failed");
+    const req = data && data.requestId ? ` · requestId=${escapeHtml(data.requestId)}` : "";
+    return `<div style="margin-bottom:.35rem;">${dot}<strong>${name}</strong>: ${detail}<span class="muted">${req}</span></div>`;
+  }).join("");
 }
 
 async function login() {
@@ -181,10 +212,10 @@ async function loadReports() {
   if (!d.ok) {
     reportsById = new Map();
     const msg = d.status === 401
-      ? "Not logged in as admin (401)."
+      ? withRequestId("Not logged in as admin (401).", d)
       : d.status === 403
-        ? `Logged in user is not admin (403: ${d.userId || "unknown"}).`
-        : `Failed to load reports (${d.status || "error"}): ${d.error || "unknown"}`;
+        ? withRequestId(`Logged in user is not admin (403: ${d.userId || "unknown"}).`, d)
+        : formatApiError("Failed to load reports", d);
     document.getElementById("reportsOut").textContent = msg;
     return;
   }
@@ -227,12 +258,12 @@ async function loadReportDetail(reportIdFromList) {
   const d = await jf(`/reports/${encodeURIComponent(reportId)}/history`);
   if (!d.ok) {
     const msg = d.status === 401
-      ? "Not logged in as admin (401)."
+      ? withRequestId("Not logged in as admin (401).", d)
       : d.status === 403
-        ? `Logged in user is not admin (403: ${d.userId || "unknown"}).`
+        ? withRequestId(`Logged in user is not admin (403: ${d.userId || "unknown"}).`, d)
         : d.status === 404
-          ? "Report not found (404)."
-          : `Failed to load report history (${d.status || "error"}): ${d.error || "unknown"}`;
+          ? withRequestId("Report not found (404).", d)
+          : formatApiError("Failed to load report history", d);
     document.getElementById("reportDetailOut").textContent = msg;
     return;
   }
@@ -261,10 +292,10 @@ async function submitModerationUpdate(payload) {
 
 function buildModerationError(d) {
   return d.status === 401
-    ? "Not logged in as admin (401)."
+    ? withRequestId("Not logged in as admin (401).", d)
     : d.status === 403
-      ? `Logged in user is not admin (403: ${d.userId || "unknown"}).`
-      : `Failed to update report (${d.status || "error"}): ${d.error || "unknown"}`;
+      ? withRequestId(`Logged in user is not admin (403: ${d.userId || "unknown"}).`, d)
+      : formatApiError("Failed to update report", d);
 }
 
 async function updateDetailReportStatus() {
@@ -328,8 +359,10 @@ document.getElementById("btnLoadReports").addEventListener("click", loadReports)
 document.getElementById("btnLoadReportDetail").addEventListener("click", () => loadReportDetail());
 document.getElementById("btnUpdateFromDetail").addEventListener("click", updateDetailReportStatus);
 document.getElementById("btnUpdateReportStatus").addEventListener("click", updateReportStatus);
+document.getElementById("btnDiagnostics").addEventListener("click", runDiagnostics);
 
 window.loadReportDetail = loadReportDetail;
 
 refreshAdminBadge();
 loadVersion();
+runDiagnostics();
