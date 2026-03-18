@@ -29,6 +29,44 @@ async function jf(path, opts = {}) {
 const uid = () => document.getElementById("userId").value.trim() || "demo-user";
 
 const ADMIN_IDS = new Set(["demo-admin", "ops"]);
+let reportsById = new Map();
+
+function escapeHtml(value) {
+  return String(value || "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#39;");
+}
+
+function fmtDate(iso) {
+  if (!iso) return "n/a";
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+function statusColor(status) {
+  switch ((status || "").toLowerCase()) {
+    case "new": return "#6b7280";
+    case "triaged": return "#2563eb";
+    case "actioned": return "#b45309";
+    case "resolved": return "#15803d";
+    default: return "#6b7280";
+  }
+}
+
+function statusChip(status) {
+  const s = (status || "new").toLowerCase();
+  return `<span style="display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:.78rem;font-weight:600;color:#fff;background:${statusColor(s)};">${escapeHtml(s)}</span>`;
+}
+
+function eventTypeLabel(eventType) {
+  const normalized = (eventType || "").toLowerCase();
+  if (normalized === "report_created") return "Report created";
+  if (normalized === "status_changed") return "Status changed";
+  return normalized ? normalized.replaceAll("_", " ") : "Event";
+}
 
 async function refreshAdminBadge() {
   const el = document.getElementById("adminBadge");
@@ -130,6 +168,7 @@ async function loadReports() {
   const d = await jf("/reports" + (status ? `?status=${encodeURIComponent(status)}` : ""));
 
   if (!d.ok) {
+    reportsById = new Map();
     const msg = d.status === 401
       ? "Not logged in as admin (401)."
       : d.status === 403
@@ -140,13 +179,106 @@ async function loadReports() {
   }
 
   if (!d.reports || !d.reports.length) {
+    reportsById = new Map();
     document.getElementById("reportsOut").textContent = "No reports found.";
     return;
   }
 
+  reportsById = new Map(d.reports.map((r) => [r.id, r]));
+
   document.getElementById("reportsOut").innerHTML = d.reports
-    .map((r) => `<div style="margin-bottom:.6rem;"><strong>${r.id}</strong> · <em>${r.status || "new"}</em><br/>${r.category} · ${(r.reporterUserId || "unknown")}<br/><span class="muted">${r.notes || ""}</span></div>`)
+    .map((r) => `<div style="margin-bottom:.75rem;"><strong>${escapeHtml(r.id)}</strong> ${statusChip(r.status || "new")}<br/>${escapeHtml(r.category || "")} · ${escapeHtml(r.reporterUserId || "unknown")}<br/><span class="muted">${escapeHtml(r.notes || "")}</span><br/><button data-report-id="${escapeHtml(r.id)}" onclick="loadReportDetail(this.dataset.reportId)" style="margin-top:.35rem;">View timeline</button></div>`)
     .join("");
+}
+
+async function loadReportDetail(reportIdFromList) {
+  const input = document.getElementById("detailReportId");
+  const reportId = (reportIdFromList || input.value || "").trim();
+  if (!reportId) {
+    document.getElementById("reportDetailOut").textContent = "Enter a report ID first.";
+    return;
+  }
+
+  input.value = reportId;
+  document.getElementById("reviewReportId").value = reportId;
+
+  const summary = reportsById.get(reportId);
+  if (summary && summary.status && summary.status !== "new") {
+    document.getElementById("detailReviewStatus").value = summary.status;
+  }
+  if (summary && summary.reviewedBy) {
+    document.getElementById("detailReviewedBy").value = summary.reviewedBy;
+  }
+  if (summary && summary.reviewerNote) {
+    document.getElementById("detailReviewerNote").value = summary.reviewerNote;
+  }
+
+  const d = await jf(`/reports/${encodeURIComponent(reportId)}/history`);
+  if (!d.ok) {
+    const msg = d.status === 401
+      ? "Not logged in as admin (401)."
+      : d.status === 403
+        ? `Logged in user is not admin (403: ${d.userId || "unknown"}).`
+        : d.status === 404
+          ? "Report not found (404)."
+          : `Failed to load report history (${d.status || "error"}): ${d.error || "unknown"}`;
+    document.getElementById("reportDetailOut").textContent = msg;
+    return;
+  }
+
+  const header = summary
+    ? `<div><strong>${escapeHtml(summary.id)}</strong> ${statusChip(summary.status || "new")}<br/><span class="muted">Category: ${escapeHtml(summary.category || "other")} · Reporter: ${escapeHtml(summary.reporterUserId || "unknown")}</span><br/><span class="muted">Last review: ${escapeHtml(summary.reviewedBy || "n/a")} @ ${escapeHtml(fmtDate(summary.reviewedAt))}</span>${summary.reviewerNote ? `<br/><span class="muted">Reviewer note: ${escapeHtml(summary.reviewerNote)}</span>` : ""}</div>`
+    : `<div><strong>${escapeHtml(reportId)}</strong></div>`;
+
+  const timeline = (d.events || []).length
+    ? d.events.map((evt) => {
+      const from = (evt.fromStatus || "").toLowerCase();
+      const to = (evt.toStatus || "").toLowerCase();
+      const statusText = (from || to)
+        ? `<span class="muted" style="margin-left:.35rem;">(${from ? statusChip(from) : "<span class=\"muted\">n/a</span>"} → ${to ? statusChip(to) : "<span class=\"muted\">n/a</span>"})</span>`
+        : "";
+      return `<li style="margin-bottom:.6rem;"><strong>${escapeHtml(eventTypeLabel(evt.eventType))}</strong>${statusText}<br/><span class="muted">${escapeHtml(fmtDate(evt.createdAt))} · ${escapeHtml(evt.actorUserId || "system")}</span>${evt.note ? `<br/>${escapeHtml(evt.note)}` : ""}</li>`;
+    }).join("")
+    : "<li>No history events found.</li>";
+
+  document.getElementById("reportDetailOut").innerHTML = `${header}<hr style="border:none;border-top:1px solid #eee; margin:.75rem 0;"/><ol style="padding-left:1.2rem; margin:0;">${timeline}</ol>`;
+}
+
+async function submitModerationUpdate(payload) {
+  return await jf("/reports/status", { method: "POST", body: JSON.stringify(payload) });
+}
+
+function buildModerationError(d) {
+  return d.status === 401
+    ? "Not logged in as admin (401)."
+    : d.status === 403
+      ? `Logged in user is not admin (403: ${d.userId || "unknown"}).`
+      : `Failed to update report (${d.status || "error"}): ${d.error || "unknown"}`;
+}
+
+async function updateDetailReportStatus() {
+  const reportId = document.getElementById("detailReportId").value.trim();
+  if (!reportId) {
+    document.getElementById("detailReviewOut").textContent = "Load a report detail first.";
+    return;
+  }
+
+  const payload = {
+    reportId,
+    status: document.getElementById("detailReviewStatus").value,
+    reviewerNote: document.getElementById("detailReviewerNote").value.trim(),
+    reviewedBy: document.getElementById("detailReviewedBy").value.trim() || "ops"
+  };
+
+  const d = await submitModerationUpdate(payload);
+  if (!d.ok) {
+    document.getElementById("detailReviewOut").textContent = buildModerationError(d);
+    return;
+  }
+
+  document.getElementById("detailReviewOut").textContent = JSON.stringify(d, null, 2);
+  await loadReports();
+  await loadReportDetail(reportId);
 }
 
 async function updateReportStatus() {
@@ -157,17 +289,19 @@ async function updateReportStatus() {
     reviewedBy: document.getElementById("reviewedBy").value.trim() || "ops"
   };
 
-  const d = await jf("/reports/status", { method: "POST", body: JSON.stringify(payload) });
+  const d = await submitModerationUpdate(payload);
   if (!d.ok) {
-    const msg = d.status === 401
-      ? "Not logged in as admin (401)."
-      : d.status === 403
-        ? `Logged in user is not admin (403: ${d.userId || "unknown"}).`
-        : `Failed to update report (${d.status || "error"}): ${d.error || "unknown"}`;
-    document.getElementById("reportAdminOut").textContent = msg;
+    document.getElementById("reportAdminOut").textContent = buildModerationError(d);
     return;
   }
   document.getElementById("reportAdminOut").textContent = JSON.stringify(d, null, 2);
+
+  await loadReports();
+
+  const currentDetailId = document.getElementById("detailReportId").value.trim();
+  if (currentDetailId && d.report && d.report.id === currentDetailId) {
+    await loadReportDetail(currentDetailId);
+  }
 }
 
 document.getElementById("btnLogin").addEventListener("click", login);
@@ -180,6 +314,10 @@ document.getElementById("btnEndSession").addEventListener("click", endSession);
 document.getElementById("btnReport").addEventListener("click", reportIt);
 document.getElementById("btnSearchCitations").addEventListener("click", searchCitations);
 document.getElementById("btnLoadReports").addEventListener("click", loadReports);
+document.getElementById("btnLoadReportDetail").addEventListener("click", () => loadReportDetail());
+document.getElementById("btnUpdateFromDetail").addEventListener("click", updateDetailReportStatus);
 document.getElementById("btnUpdateReportStatus").addEventListener("click", updateReportStatus);
+
+window.loadReportDetail = loadReportDetail;
 
 refreshAdminBadge();

@@ -117,6 +117,35 @@
       <button id="btnLoadReports">Load reports</button>
     </div>
     <div id="reportsOut"><pre>No reports loaded.</pre></div>
+
+    <h4 style="margin-top:1rem; margin-bottom:.4rem;">Report detail</h4>
+    <p class="muted" style="margin-top:0;">Select a report from the list or enter an ID to load history timeline.</p>
+    <div class="row">
+      <div>
+        <label>Detail report ID<br /><input id="detailReportId" placeholder="report-id" /></label>
+      </div>
+      <button id="btnLoadReportDetail">Load detail</button>
+    </div>
+    <div id="reportDetailOut"><pre>No report detail loaded.</pre></div>
+
+    <div class="row">
+      <div>
+        <label>Detail new status<br />
+          <select id="detailReviewStatus">
+            <option value="triaged">triaged</option>
+            <option value="actioned">actioned</option>
+            <option value="resolved">resolved</option>
+          </select>
+        </label>
+      </div>
+      <div>
+        <label>Detail reviewer<br /><input id="detailReviewedBy" value="ops" /></label>
+      </div>
+    </div>
+    <label>Detail reviewer note<br /><textarea id="detailReviewerNote" placeholder="Moderator action note"></textarea></label>
+    <button id="btnUpdateFromDetail">Update from detail panel</button>
+    <pre id="detailReviewOut">No detail moderation action yet.</pre>
+
     <div class="row" style="margin-top:.75rem;">
       <div>
         <label>Report ID<br /><input id="reviewReportId" placeholder="report-id" /></label>
@@ -139,7 +168,7 @@
     <pre id="reportAdminOut">No moderation action yet.</pre>
   </div>
 
-  <script src="/assets/js/config.js?v=phase2d4"></script>
-  <script src="/assets/js/app.js?v=phase2d4"></script>
+  <script src="/assets/js/config.js?v=phase3m1"></script>
+  <script src="/assets/js/app.js?v=phase3m1"></script>
 </body>
 </html>
