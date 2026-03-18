@@ -134,6 +134,27 @@ const html = `<!doctype html>
 
       <div class="row">
         <div>
+          <label>Detail new status</label>
+          <select id="detailReviewStatus">
+            <option value="triaged">triaged</option>
+            <option value="actioned">actioned</option>
+            <option value="resolved">resolved</option>
+          </select>
+        </div>
+        <div>
+          <label>Detail reviewer</label>
+          <input id="detailReviewedBy" value="ops" />
+        </div>
+      </div>
+      <label>Detail reviewer note</label>
+      <textarea id="detailReviewerNote" placeholder="Moderator action note"></textarea>
+      <div class="row" style="margin-top:.75rem;">
+        <button onclick="updateDetailReportStatus()">Update from detail panel</button>
+      </div>
+      <pre id="detailReviewOut" class="result">No detail moderation action yet.</pre>
+
+      <div class="row">
+        <div>
           <label>Report ID</label>
           <input id="reviewReportId" placeholder="report-id" />
         </div>
@@ -344,6 +365,17 @@ const html = `<!doctype html>
         document.getElementById('reviewReportId').value = reportId;
 
         const summary = reportsById.get(reportId);
+
+        if (summary && summary.status && summary.status !== 'new') {
+          document.getElementById('detailReviewStatus').value = summary.status;
+        }
+        if (summary && summary.reviewedBy) {
+          document.getElementById('detailReviewedBy').value = summary.reviewedBy;
+        }
+        if (summary && summary.reviewerNote) {
+          document.getElementById('detailReviewerNote').value = summary.reviewerNote;
+        }
+
         const data = await jfetch('/reports/' + encodeURIComponent(reportId) + '/history');
 
         if (!data.ok) {
@@ -360,7 +392,10 @@ const html = `<!doctype html>
 
         const header = summary
           ? '<div><strong>' + escapeHtml(summary.id) + '</strong> · <em>' + escapeHtml(summary.status || 'new') + '</em>'
-            + '<br/><span class="muted">Category: ' + escapeHtml(summary.category || 'other') + ' · Reporter: ' + escapeHtml(summary.reporterUserId || 'unknown') + '</span></div>'
+            + '<br/><span class="muted">Category: ' + escapeHtml(summary.category || 'other') + ' · Reporter: ' + escapeHtml(summary.reporterUserId || 'unknown') + '</span>'
+            + '<br/><span class="muted">Last review: ' + escapeHtml(summary.reviewedBy || 'n/a') + ' @ ' + escapeHtml(fmtDate(summary.reviewedAt)) + '</span>'
+            + (summary.reviewerNote ? '<br/><span class="muted">Reviewer note: ' + escapeHtml(summary.reviewerNote) + '</span>' : '')
+            + '</div>'
           : '<div><strong>' + escapeHtml(reportId) + '</strong></div>';
 
         const timeline = (data.events || []).length
@@ -379,6 +414,43 @@ const html = `<!doctype html>
         document.getElementById('reportDetailOut').innerHTML = header + '<hr style="border:none;border-top:1px solid #eee; margin:.75rem 0;"/><ol style="padding-left:1.2rem; margin:0;">' + timeline + '</ol>';
       }
 
+      async function submitModerationUpdate(payload) {
+        return await jfetch('/reports/status', { method: 'POST', body: JSON.stringify(payload) });
+      }
+
+      function buildModerationError(data) {
+        return data.status === 401
+          ? 'Not logged in as admin (401).'
+          : data.status === 403
+            ? 'Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').'
+            : 'Failed to update report (' + (data.status || 'error') + '): ' + (data.error || 'unknown');
+      }
+
+      async function updateDetailReportStatus() {
+        const reportId = document.getElementById('detailReportId').value.trim();
+        if (!reportId) {
+          document.getElementById('detailReviewOut').textContent = 'Load a report detail first.';
+          return;
+        }
+
+        const payload = {
+          reportId,
+          status: document.getElementById('detailReviewStatus').value,
+          reviewerNote: document.getElementById('detailReviewerNote').value.trim(),
+          reviewedBy: document.getElementById('detailReviewedBy').value.trim() || 'ops'
+        };
+
+        const data = await submitModerationUpdate(payload);
+        if (!data.ok) {
+          document.getElementById('detailReviewOut').textContent = buildModerationError(data);
+          return;
+        }
+
+        document.getElementById('detailReviewOut').textContent = JSON.stringify(data, null, 2);
+        await loadReports();
+        await loadReportDetail(reportId);
+      }
+
       async function updateReportStatus() {
         const payload = {
           reportId: document.getElementById('reviewReportId').value.trim(),
@@ -387,17 +459,14 @@ const html = `<!doctype html>
           reviewedBy: document.getElementById('reviewedBy').value.trim() || 'ops'
         };
 
-        const data = await jfetch('/reports/status', { method: 'POST', body: JSON.stringify(payload) });
+        const data = await submitModerationUpdate(payload);
         if (!data.ok) {
-          const msg = data.status === 401
-            ? 'Not logged in as admin (401).'
-            : data.status === 403
-              ? 'Logged in user is not admin (403: ' + (data.userId || 'unknown') + ').'
-              : 'Failed to update report (' + (data.status || 'error') + '): ' + (data.error || 'unknown');
-          document.getElementById('reportAdminOut').textContent = msg;
+          document.getElementById('reportAdminOut').textContent = buildModerationError(data);
           return;
         }
         document.getElementById('reportAdminOut').textContent = JSON.stringify(data, null, 2);
+
+        await loadReports();
 
         const currentDetailId = document.getElementById('detailReportId').value.trim();
         if (currentDetailId && data.report && data.report.id === currentDetailId) {
