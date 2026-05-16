@@ -30,7 +30,9 @@ const authSessions = new Map();
 const dialogueSessions = new Map();
 const rateLimitStore = new Map();
 
-const isProd = (process.env.NODE_ENV || "development") === "production";
+const nodeEnv = process.env.NODE_ENV || "development";
+const isProd = nodeEnv === "production";
+const allowDevStubAuth = !isProd || process.env.ALLOW_DEV_STUB_AUTH === "true";
 const adminUserIds = new Set(
   (process.env.ADMIN_USER_IDS || "demo-admin,ops")
     .split(",")
@@ -904,8 +906,15 @@ const server = http.createServer(async (req, res) => {
     const password = (body.password || "").toString();
     const displayName = (body.displayName || "").toString().trim();
 
-    // If no email/password provided, keep previous stub behaviour for dev flows.
+    // If no email/password provided, keep previous stub behaviour for dev/local flows only.
     if (!email || !password) {
+      if (!allowDevStubAuth) {
+        return sendJson(req, res, 400, {
+          ok: false,
+          error: "Email and password are required"
+        });
+      }
+
       return sendJson(req, res, 200, {
         ok: true,
         next: "verify-email",
@@ -1019,7 +1028,14 @@ const server = http.createServer(async (req, res) => {
       );
     }
 
-    // Fallback: keep existing stub userId-based login for dev/local flows.
+    // Fallback: keep existing stub userId-based login for dev/local flows only.
+    if (!allowDevStubAuth) {
+      return sendJson(req, res, 400, {
+        ok: false,
+        error: "Email and password are required"
+      });
+    }
+
     const userId = (body.userId || "demo-user").toString();
     const token = crypto.randomUUID();
     const createdAt = new Date().toISOString();

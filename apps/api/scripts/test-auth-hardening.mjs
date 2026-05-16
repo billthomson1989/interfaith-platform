@@ -45,20 +45,20 @@ async function main() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ userId: "auth-hardening-user" })
     });
-    assert.equal(loginRes.status, 200);
+    assert.equal(loginRes.status, 400);
+    const loginJson = await loginRes.json();
+    assert.equal(loginJson.ok, false);
+    assert.match(loginJson.error, /email and password are required/i);
 
-    const setCookie = loginRes.headers.get("set-cookie") || "";
-    assert.ok(setCookie.includes("HttpOnly"));
-    assert.ok(setCookie.includes("SameSite=Lax"));
-    assert.ok(setCookie.includes("Secure"));
-
-    const cookieHeader = setCookie.split(";")[0];
-
-    const meRes = await fetch(`${API_BASE_URL}/me`, { headers: { cookie: cookieHeader } });
-    assert.equal(meRes.status, 200);
-    const me = await meRes.json();
-    assert.equal(me.ok, true);
-    assert.equal(me.userId, "auth-hardening-user");
+    const signupRes = await fetch(`${API_BASE_URL}/auth/signup`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ userId: "auth-hardening-user" })
+    });
+    assert.equal(signupRes.status, 400);
+    const signupJson = await signupRes.json();
+    assert.equal(signupJson.ok, false);
+    assert.match(signupJson.error, /email and password are required/i);
 
     let got429 = false;
     for (let i = 0; i < 20; i += 1) {
