@@ -53,11 +53,13 @@ Implemented in: `apps/api/src/server.js`
   - `report_events`
   - `citations`
   - `auth_sessions`
+  - `users`
 
 ### E. Frontend shell implemented (Sprint 1 + Phase 2 slices)
 Implemented in: `apps/web/src/server.js`
 
-- ✅ Auth UI and calls (`/auth/login`, `/me`)
+- ✅ Auth UI and calls (`/auth/login`, `/auth/signup`, `/me`)
+- ✅ Optional email/password auth UI for Postgres-backed flows
 - ✅ Queue UI and calls (`/queue/join`, `/queue/status`, `/queue/leave`)
 - ✅ Session status / end UI (`/session/status`, `/session/end`)
 - ✅ Moderation report UI and call (`/reports`)
@@ -103,15 +105,18 @@ Implemented in: `apps/api/src/server.js`, `apps/web/src/server.js`, `apps/web/sc
 Implemented in: `apps/api/src/server.js`
 
 - ✅ `auth_sessions` Postgres table for durable sessions
+- ✅ `users` Postgres table for basic real-user auth
 - ✅ Cookie-based session with `HttpOnly`, `SameSite=Lax`, max-age, and `Secure` in production
 - ✅ `GET /me` driven by session cookie + DB-backed lookup
+- ✅ Email/password signup and login path using Node `crypto.scrypt` when Postgres is enabled
+- ✅ Stub `userId` login path preserved for local/dev flows
 - ✅ Basic rate limiting on:
   - `/auth/login`
   - `/queue/join`
   - `/queue/leave`
   - `/reports`
 
-> Note: auth is still a **userId-based stub** (no passwords/identity provider yet). See remaining work below.
+> Note: the dev-friendly `userId` login path still exists and should be gated to local/dev only in production-facing environments.
 
 ### I. Moderation pipeline v1 (Sprint 2D core)
 Implemented in: `apps/api/src/server.js`, `apps/web/src/server.js`
@@ -176,8 +181,9 @@ Current state:
 - Matching happens immediately on join with simple compatibility rules.
 
 Follow-ups:
-- [ ] Add **queue entry expiry** (e.g. mark entries as `expired` after N minutes and drop them from matching).
-- [ ] Expose basic queue/matcher metrics in `/health` payload (e.g. `activeSessions`, `queueDepth`, maybe `expiredCount`).
+- [x] Add **queue entry expiry** (stale entries are dropped from matching based on `QUEUE_TTL_MS`).
+- [x] Expose basic queue/matcher metrics in `/health` payload (`activeSessions`, `queueDepth`, `queue.ttlMs`).
+- [ ] Consider exposing `expiredCount` as an additional metric if it becomes operationally useful.
 - [ ] (Optional) Extract matcher into a small module to make later Redis/worker migration straightforward.
 
 ### Priority C — Moderation auto-flag heuristics
@@ -201,7 +207,7 @@ Current state:
 Follow-ups:
 - [ ] Confirm production `CORS_ORIGINS` is locked down to real frontend origins (no wildcards in live envs).
 - [ ] Confirm temporary DNS fallback paths (if any) have been removed from deploy/runtime config.
-- [ ] Add a short `docs/interfaith-ops-runbook.md` summarizing:
+- [x] Add a short `docs/interfaith-ops-runbook.md` summarizing:
   - how to restart
   - where logs live
   - how to run smoke tests
@@ -214,9 +220,9 @@ Follow-ups:
 Phase 2 should be considered complete when:
 
 - [ ] Real citation data path is live (already true) and documented as such.
-- [ ] Queue produces real matched sessions with lifecycle transitions, plus basic expiry handling.
-- [ ] Auth/session uses a real user model with durable sessions and rate limits (stub login still allowed only in dev).
-- [ ] Moderation workflow includes an auto-flag heuristic layer surfaced in the admin UI.
+- [x] Queue produces real matched sessions with lifecycle transitions, plus basic expiry handling.
+- [x] Auth/session uses a real user model with durable sessions and rate limits (stub login still allowed only in dev/local flows today).
+- [x] Moderation workflow includes an auto-flag heuristic layer surfaced in the admin UI.
 - [ ] Health/ready/version + diagnostics are wired, and CORS/DNS/ops runbook are tightened for the live environment.
 
 Once these are checked off, the next step is a **Phase 3** doc focused on product features rather than plumbing (e.g. richer dialogue UX, additional traditions, facilitator tooling).
