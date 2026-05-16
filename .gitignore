@@ -1,6 +1,7 @@
 .openclaw/
 node_modules/
 tmp/
+tmp-nvidia-kimi-test.json
 *.log
 browser_status.txt
 
