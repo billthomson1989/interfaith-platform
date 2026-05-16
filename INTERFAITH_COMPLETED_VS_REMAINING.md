@@ -109,7 +109,7 @@ Implemented in: `apps/api/src/server.js`
 - ✅ Cookie-based session with `HttpOnly`, `SameSite=Lax`, max-age, and `Secure` in production
 - ✅ `GET /me` driven by session cookie + DB-backed lookup
 - ✅ Email/password signup and login path using Node `crypto.scrypt` when Postgres is enabled
-- ✅ Stub `userId` login path preserved for local/dev flows
+- ✅ Stub `userId` login path preserved for local/dev flows only
 - ✅ Basic rate limiting on:
   - `/auth/login`
   - `/queue/join`
@@ -135,13 +135,22 @@ Implemented in: `apps/api/src/server.js`, `apps/web/src/server.js`
   - inline status/notes updates
 
 ### J. Observability and production plumbing
-Implemented in: `apps/api/src/server.js`, `apps/web/src/server.js`, `docs/interfaith-deploy-restart-checklist.md`
+Implemented in: `apps/api/src/server.js`, `apps/web/src/server.js`, `docs/interfaith-deploy-restart-checklist.md`, `docs/interfaith-ops-runbook.md`
 
 - ✅ Structured JSON request logs with:
   - request id, method, path, status, duration, IP, user-agent, referer, userId
 - ✅ Request-id surfaced to clients via `X-Request-Id` header
 - ✅ `/health`, `/ready`, `/version` endpoints
+- ✅ Queue health metrics include:
+  - `queueDepth`
+  - `queue.ttlMs`
+  - `queue.expiredCount`
 - ✅ CORS allowlist driven by `CORS_ORIGINS` env var with validation + warnings
+- ✅ Production runtime guidance now documents:
+  - real frontend-only CORS allowlists
+  - disabled fallback-by-default frontend runtime config
+  - stub auth disabled in production
+  - real admin IDs required in production
 - ✅ Diagnostics panel in frontend hitting health/ready/version
 - ✅ Deploy/restart checklist documenting:
   - DB-backed citation path
@@ -172,7 +181,7 @@ Planned work:
   - email + password using Node's `crypto.scrypt` (no external deps) with basic signup/login.
 - [x] Wire `/auth/signup` and `/auth/login` to the real user model while keeping the `userId` stub path for dev.
 - [x] Extend rate limiting and error payloads for auth to be deterministic and safe.
-- [ ] Update docs to describe the auth model and any environment variables required.
+- [x] Update docs to describe the auth model and key environment variables required.
 
 ### Priority B — Queue/matcher robustness
 
@@ -182,8 +191,7 @@ Current state:
 
 Follow-ups:
 - [x] Add **queue entry expiry** (stale entries are dropped from matching based on `QUEUE_TTL_MS`).
-- [x] Expose basic queue/matcher metrics in `/health` payload (`activeSessions`, `queueDepth`, `queue.ttlMs`).
-- [ ] Consider exposing `expiredCount` as an additional metric if it becomes operationally useful.
+- [x] Expose basic queue/matcher metrics in `/health` payload (`activeSessions`, `queueDepth`, `queue.ttlMs`, `queue.expiredCount`).
 - [ ] (Optional) Extract matcher into a small module to make later Redis/worker migration straightforward.
 
 ### Priority C — Moderation auto-flag heuristics
@@ -205,8 +213,8 @@ Current state:
 - Core health/ready/version + deploy checklist are in place.
 
 Follow-ups:
-- [ ] Confirm production `CORS_ORIGINS` is locked down to real frontend origins (no wildcards in live envs).
-- [ ] Confirm temporary DNS fallback paths (if any) have been removed from deploy/runtime config.
+- [x] Confirm production `CORS_ORIGINS` guidance is locked down to real frontend origins (no wildcards, no localhost in prod samples/docs).
+- [x] Confirm frontend runtime fallback is disabled by default in deploy/runtime config and docs.
 - [x] Add a short `docs/interfaith-ops-runbook.md` summarizing:
   - how to restart
   - where logs live
@@ -223,6 +231,6 @@ Phase 2 should be considered complete when:
 - [x] Queue produces real matched sessions with lifecycle transitions, plus basic expiry handling.
 - [x] Auth/session uses a real user model with durable sessions and rate limits (stub login still allowed only in dev/local flows today).
 - [x] Moderation workflow includes an auto-flag heuristic layer surfaced in the admin UI.
-- [ ] Health/ready/version + diagnostics are wired, and CORS/DNS/ops runbook are tightened for the live environment.
+- [x] Health/ready/version + diagnostics are wired, and CORS/runtime/ops runbook guidance is tightened for the live environment.
 
 Once these are checked off, the next step is a **Phase 3** doc focused on product features rather than plumbing (e.g. richer dialogue UX, additional traditions, facilitator tooling).

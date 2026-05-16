@@ -55,7 +55,7 @@ For detailed status, see also: `INTERFAITH_COMPLETED_VS_REMAINING.md`.
   - end the session and verify `ended`/inactive state.
 
 ### Remaining follow-ups
-- Add explicit **queue entry expiry** rules and surface basic matcher/queue metrics.
+- Queue entry expiry and health metrics are now in place, including `queue.expiredCount`.
 - Optionally extract matcher logic into its own module to ease future Redis/worker migration.
 
 ---
@@ -79,8 +79,8 @@ For detailed status, see also: `INTERFAITH_COMPLETED_VS_REMAINING.md`.
 
 ### Remaining follow-ups
 - Keep the new `users` table and scrypt-based email/password auth path documented and tested.
-- Gate the userId-based stub login to local/dev only.
-- Extend docs and env configuration to describe the auth model.
+- The userId-based stub login is now gated to local/dev only.
+- Continue tightening docs and env configuration as deployment details evolve.
 
 ---
 
@@ -111,8 +111,8 @@ For detailed status, see also: `INTERFAITH_COMPLETED_VS_REMAINING.md`.
 - Keep the new **auto-flag heuristics** tuned and documented:
   - `severity`/`autoFlag` are now derived from category + notes using simple rules.
   - they are surfaced in the admin UI as hints, not automatic actions.
-- Tighten production `CORS_ORIGINS` and confirm DNS fallback paths are fully removed.
-- Add a small `interfaith-ops-runbook` doc summarizing restarts, logs, smoke tests, and rollback.
+- Production CORS/runtime guidance and the ops runbook are now in place.
+- Remaining live-env work is mainly operational confirmation at deploy time, not missing code paths.
 
 ---
 
@@ -127,14 +127,14 @@ For detailed status, see also: `INTERFAITH_COMPLETED_VS_REMAINING.md`.
 
 ## Immediate next actions (as of 2026-04-11)
 
-1. **Auth/identity cleanup (Sprint 2C follow-up)**
-   - Gate the current userId-based login to dev-only.
-   - Document and test the new email/password auth path.
+1. **Live-env operational confirmation**
+   - Confirm production env vars match the tightened docs (`CORS_ORIGINS`, `ALLOW_DEV_STUB_AUTH`, `ADMIN_USER_IDS`, `QUEUE_TTL_MS`).
+   - Confirm the frontend runtime keeps `apiFallback: ""` unless intentionally needed during an incident.
 
-2. **Queue/matcher robustness (Sprint 2B follow-up)**
-   - Validate queue entry expiry behavior and, if useful, expose expired counts in `/health`.
+2. **Moderation heuristics tuning**
+   - Tune keyword/category rules and document expected behavior if false positives/negatives show up in real usage.
 
-3. **Moderation heuristics tuning (Sprint 2D follow-up)**
-   - Tune keyword/category rules and document expected behavior.
+3. **Phase 3 planning**
+   - Once live-env confirmation is done, move to a Phase 3 doc focused on richer product features rather than plumbing.
 
-These three together close out the remaining Phase 2 work described in `INTERFAITH_COMPLETED_VS_REMAINING.md`. After that, we can spin up a Phase 3 doc focused on richer product features (dialogue UX, facilitator tools, additional traditions, etc.).
+At this point, most remaining Phase 2 work is operational confirmation rather than core implementation.
