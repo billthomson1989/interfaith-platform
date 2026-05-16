@@ -34,7 +34,7 @@ const loadBuildMeta = () => {
 
 const { commitSha, buildTime } = loadBuildMeta();
 const adminUserIds = new Set((process.env.ADMIN_USER_IDS || 'demo-admin,ops').split(',').map((s) => s.trim()).filter(Boolean));
-const allowedOrigins = (process.env.CORS_ORIGINS || 'https://interfaith.billthomson.elementfx.com,http://localhost:3000,http://127.0.0.1:3000')
+const allowedOrigins = (process.env.CORS_ORIGINS || 'https://interfaith.billthomson.elementfx.com')
   .split(',')
   .map((origin) => origin.trim())
   .filter(Boolean);

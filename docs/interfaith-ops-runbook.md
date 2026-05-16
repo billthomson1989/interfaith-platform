@@ -189,10 +189,18 @@ If health fails, inspect logs and decide whether to roll back further.
     CORS_ORIGINS=https://interfaith.billthomson.elementfx.com
     ```
 
+  - Do not leave localhost origins in the production allowlist.
+  - Do not use `*` for credentialed frontend traffic.
+
 - **Queue TTL:**
   - `QUEUE_TTL_MS` controls how long queue entries live before being expired.
   - Default: 5 minutes (300000 ms). Set an explicit value in the API env if you need a different window.
 - **Admin auth:**
-  - Admin endpoints require a session cookie whose `userId` is in `ADMIN_USER_IDS` (e.g. `demo-admin,ops`).
+  - Admin endpoints require a session cookie whose `userId` is in `ADMIN_USER_IDS`.
+  - In production, replace demo defaults with the real admin user IDs for your environment.
+
+- **Stub auth:**
+  - The `userId` stub login path is for local/dev only.
+  - In production, leave `ALLOW_DEV_STUB_AUTH` unset or `false`.
 
 This file should stay short and practical. If you change how deploy or hosting works, update this runbook alongside the code.

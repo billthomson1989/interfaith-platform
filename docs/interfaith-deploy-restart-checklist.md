@@ -33,7 +33,9 @@ npm --workspace @interfaith/web run smoke:e2e
 - [ ] API environment has expected values:
   - [ ] `USE_POSTGRES=true` (for DB-backed citation search)
   - [ ] `DATABASE_URL` set and reachable
-  - [ ] `CORS_ORIGINS` includes frontend origin(s)
+  - [ ] `CORS_ORIGINS` is restricted to real frontend origin(s) only
+  - [ ] `ALLOW_DEV_STUB_AUTH=false` (or unset)
+  - [ ] `ADMIN_USER_IDS` is set to real admin user IDs, not demo defaults
 - [ ] Frontend/API routing points to primary API domain:
   - [ ] `https://api.interfaith.billthomson.elementfx.com/api`
 - [ ] If this is first DB-backed citation deploy, seed citations:
@@ -128,10 +130,11 @@ Expect:
   - `deploy/interfaith-live/assets/js/app.js`
 - After upload, hard-refresh with version param (`?v=phase3m3`) to avoid stale asset cache.
 
-### Optional fallback check
+### Frontend runtime fallback
 
-- [ ] Verify explicit fallback mode still works:
-  - [ ] `https://interfaith.billthomson.elementfx.com/?v=fix2&fallback=1`
+- [ ] Confirm frontend runtime fallback is disabled by default:
+  - [ ] `deploy/interfaith-live/assets/js/config.js` keeps `apiFallback: ""`
+- [ ] Only enable a fallback origin intentionally during an incident, then remove it afterward.
 
 ---
 
