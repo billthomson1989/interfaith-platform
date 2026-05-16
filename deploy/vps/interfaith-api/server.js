@@ -104,6 +104,7 @@ const reportEvents = [];
 const dialogueSessions = new Map();
 const authSessions = new Map();
 const rateLimitStore = new Map();
+let expiredQueueEntryCount = 0;
 
 const citations = [
   { id: 'quran-2-256-en-sahih', tradition: 'islam', reference: "Qur'an 2:256", canonical_key: 'QURAN 2:256', text: 'There is no compulsion in religion.', translation: 'Sahih International', source: "Qur'an", language: 'en', tags: ['freedom', 'religion', 'conscience'] },
@@ -242,12 +243,16 @@ function canMatch(a, b) {
 
 function expireStaleQueueEntries() {
   const now = Date.now();
+  let expired = 0;
   for (const [userId, entry] of queueByUser.entries()) {
     const ts = new Date(entry.queuedAt).getTime();
     if (!Number.isFinite(ts) || now - ts > QUEUE_TTL_MS) {
       queueByUser.delete(userId);
+      expired += 1;
     }
   }
+  expiredQueueEntryCount += expired;
+  return expired;
 }
 
 function tryMatchForUser(newEntry) {
@@ -296,7 +301,8 @@ app.get(route('/health'), (_req, res) => {
     queueDepth: queueByUser.size,
     queue: {
       depth: queueByUser.size,
-      ttlMs: QUEUE_TTL_MS
+      ttlMs: QUEUE_TTL_MS,
+      expiredCount: expiredQueueEntryCount
     },
     ts: new Date().toISOString()
   });

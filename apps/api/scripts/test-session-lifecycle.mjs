@@ -43,6 +43,7 @@ async function main() {
       ...process.env,
       API_PORT: String(API_PORT),
       USE_POSTGRES: "false",
+      QUEUE_TTL_MS: "50",
       CORS_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000"
     },
     stdio: "pipe"
@@ -53,6 +54,18 @@ async function main() {
 
   try {
     await waitForHealth(`${API_BASE_URL}/health`);
+
+    const staleUser = "stale-queue-user";
+    const staleJoin = await jpost("/queue/join", { userId: staleUser, modePreference: "voice_only", language: "en" });
+    assert.equal(staleJoin.status, 200);
+    assert.equal(staleJoin.data.queued, true);
+
+    await sleep(100);
+
+    const healthAfterExpiry = await jget("/health");
+    assert.equal(healthAfterExpiry.status, 200);
+    assert.equal(healthAfterExpiry.data.queue.depth, 0);
+    assert.ok((healthAfterExpiry.data.queue.expiredCount || 0) >= 1);
 
     const userA = "session-user-a";
     const userB = "session-user-b";
@@ -81,6 +94,11 @@ async function main() {
     const bStatusAfter = await jget(`/session/status?userId=${encodeURIComponent(userB)}`);
     assert.equal(bStatusAfter.status, 200);
     assert.equal(bStatusAfter.data.active, false);
+
+    const finalHealth = await jget("/health");
+    assert.equal(finalHealth.status, 200);
+    assert.equal(finalHealth.data.queue.ttlMs, 50);
+    assert.ok((finalHealth.data.queue.expiredCount || 0) >= 1);
 
     console.log("✅ Session lifecycle API tests passed");
   } finally {

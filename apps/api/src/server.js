@@ -41,6 +41,7 @@ const adminUserIds = new Set(
 );
 
 let pgClient = null;
+let expiredQueueEntryCount = 0;
 
 // Basic password hashing helpers for optional real user auth.
 // Format: "scrypt:<saltHex>:<hashHex>".
@@ -185,6 +186,7 @@ const expireStaleQueueEntries = async () => {
     await pgClient.query(`delete from queue_entries where user_id = any($1)`, [expiredUserIds]);
   }
 
+  expiredQueueEntryCount += expiredUserIds.length;
   return expiredUserIds.length;
 };
 
@@ -864,7 +866,8 @@ const server = http.createServer(async (req, res) => {
       queueDepth: queueByUser.size,
       queue: {
         depth: queueByUser.size,
-        ttlMs: QUEUE_TTL_MS
+        ttlMs: QUEUE_TTL_MS,
+        expiredCount: expiredQueueEntryCount
       },
       timestamp: new Date().toISOString()
     });
