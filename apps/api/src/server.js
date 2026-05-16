@@ -6,6 +6,11 @@ import { fileURLToPath } from "node:url";
 
 const port = Number(process.env.API_PORT || 4000);
 const usePostgres = process.env.USE_POSTGRES === "true";
+const QUEUE_TTL_MS = (() => {
+  const raw = Number(process.env.QUEUE_TTL_MS || "");
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return 5 * 60_000; // default: 5 minutes
+})();
 const commitSha = process.env.COMMIT_SHA || process.env.GIT_COMMIT || "dev";
 const buildTime = process.env.BUILD_TIME || null;
 const startedAt = new Date().toISOString();
@@ -34,6 +39,35 @@ const adminUserIds = new Set(
 );
 
 let pgClient = null;
+
+// Basic password hashing helpers for optional real user auth.
+// Format: "scrypt:<saltHex>:<hashHex>".
+const hashPassword = (password) => {
+  const pwd = (password || "").toString();
+  if (!pwd) throw new Error("Password required");
+
+  const salt = crypto.randomBytes(16);
+  const hash = crypto.scryptSync(pwd, salt, 64);
+  return `scrypt:${salt.toString("hex")}:${hash.toString("hex")}`;
+};
+
+const verifyPassword = (password, encoded) => {
+  const pwd = (password || "").toString();
+  if (!pwd || !encoded || typeof encoded !== "string") return false;
+
+  const parts = encoded.split(":");
+  if (parts.length !== 3 || parts[0] !== "scrypt") return false;
+
+  const [, saltHex, hashHex] = parts;
+  if (!saltHex || !hashHex) return false;
+
+  const salt = Buffer.from(saltHex, "hex");
+  const expected = Buffer.from(hashHex, "hex");
+  const actual = crypto.scryptSync(pwd, salt, expected.length);
+
+  if (actual.length !== expected.length) return false;
+  return crypto.timingSafeEqual(actual, expected);
+};
 
 const normalizeCitation = (raw) => {
   if (!raw || typeof raw !== "object") return null;
@@ -131,6 +165,25 @@ const canMatch = (a, b) => {
   const sameLanguage = (a.language || "").toLowerCase() === (b.language || "").toLowerCase();
   const matchedMode = resolveMatchedMode(a.mode, b.mode);
   return sameLanguage && Boolean(matchedMode);
+};
+
+const expireStaleQueueEntries = async () => {
+  const now = Date.now();
+  const expiredUserIds = [];
+
+  for (const [userId, entry] of queueByUser.entries()) {
+    const ts = new Date(entry.queuedAt).getTime();
+    if (!Number.isFinite(ts) || now - ts > QUEUE_TTL_MS) {
+      queueByUser.delete(userId);
+      expiredUserIds.push(userId);
+    }
+  }
+
+  if (pgClient && expiredUserIds.length) {
+    await pgClient.query(`delete from queue_entries where user_id = any($1)`, [expiredUserIds]);
+  }
+
+  return expiredUserIds.length;
 };
 
 const tryMatchForUser = (newEntry) => {
@@ -247,6 +300,8 @@ const initPostgresIfEnabled = async () => {
     await pgClient.query(`alter table moderation_reports add column if not exists reviewer_note text`);
     await pgClient.query(`alter table moderation_reports add column if not exists reviewed_by text`);
     await pgClient.query(`alter table moderation_reports add column if not exists reviewed_at timestamptz`);
+    await pgClient.query(`alter table moderation_reports add column if not exists auto_flag boolean not null default false`);
+    await pgClient.query(`alter table moderation_reports add column if not exists severity text not null default 'low'`);
     await pgClient.query(`
       create table if not exists report_events (
         id text primary key,
@@ -270,6 +325,15 @@ const initPostgresIfEnabled = async () => {
         started_at timestamptz,
         ended_at timestamptz,
         ended_reason text
+      )
+    `);
+    await pgClient.query(`
+      create table if not exists users (
+        id text primary key,
+        email text unique not null,
+        display_name text not null,
+        password_hash text not null,
+        created_at timestamptz not null default now()
       )
     `);
     await pgClient.query(`
@@ -495,6 +559,47 @@ const getAuthSession = async (token) => {
   return session;
 };
 
+const findUserByEmail = async (email) => {
+  if (!pgClient) return null;
+  const normalized = (email || "").toString().trim().toLowerCase();
+  if (!normalized) return null;
+
+  const { rows } = await pgClient.query(
+    `select id, email, display_name, password_hash, created_at from users where lower(email) = $1 limit 1`,
+    [normalized]
+  );
+  if (!rows.length) return null;
+
+  const row = rows[0];
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.display_name,
+    passwordHash: row.password_hash,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null
+  };
+};
+
+const getUserProfileById = async (userId) => {
+  if (!pgClient) return null;
+  const id = (userId || "").toString();
+  if (!id) return null;
+
+  const { rows } = await pgClient.query(
+    `select id, email, display_name, created_at from users where id = $1 limit 1`,
+    [id]
+  );
+  if (!rows.length) return null;
+
+  const row = rows[0];
+  return {
+    id: row.id,
+    email: row.email,
+    displayName: row.display_name,
+    createdAt: row.created_at ? new Date(row.created_at).toISOString() : null
+  };
+};
+
 const requireAdminSession = async (req, res) => {
   const cookies = parseCookies(req);
   const token = cookies.interfaith_session;
@@ -577,7 +682,7 @@ const listReports = async ({ status }) => {
     }
 
     const { rows } = await pgClient.query(
-      `select id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at
+      `select id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at, auto_flag, severity
        from moderation_reports
        ${where}
        order by created_at desc
@@ -596,6 +701,8 @@ const listReports = async ({ status }) => {
       reviewerNote: r.reviewer_note,
       reviewedBy: r.reviewed_by,
       reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : null,
+      autoFlag: r.auto_flag === true,
+      severity: r.severity || "low",
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : null
     }));
   }
@@ -609,7 +716,7 @@ const listReports = async ({ status }) => {
 const getReportById = async (reportId) => {
   if (pgClient) {
     const { rows } = await pgClient.query(
-      `select id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at
+      `select id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at, auto_flag, severity
        from moderation_reports where id = $1 limit 1`,
       [reportId]
     );
@@ -626,6 +733,8 @@ const getReportById = async (reportId) => {
       reviewerNote: r.reviewer_note,
       reviewedBy: r.reviewed_by,
       reviewedAt: r.reviewed_at ? new Date(r.reviewed_at).toISOString() : null,
+      autoFlag: r.auto_flag === true,
+      severity: r.severity || "low",
       createdAt: r.created_at ? new Date(r.created_at).toISOString() : null
     };
   }
@@ -691,6 +800,45 @@ const listReportEvents = async (reportId) => {
   }));
 };
 
+const computeModerationHeuristics = ({ category, notes }) => {
+  const cat = (category || "").toString().toLowerCase().trim();
+  const text = (notes || "").toString().toLowerCase();
+
+  let severity = "low";
+  let autoFlag = false;
+  const reasons = [];
+
+  const highCategories = new Set(["hate", "harassment", "sexual-content"]);
+  const mediumCategories = new Set(["misinformation"]);
+
+  if (highCategories.has(cat)) {
+    severity = "high";
+    autoFlag = true;
+    reasons.push(`category:${cat}`);
+  } else if (mediumCategories.has(cat)) {
+    severity = "medium";
+    autoFlag = true;
+    reasons.push(`category:${cat}`);
+  }
+
+  if (text) {
+    const highKeywords = ["kill", "murder", "violence", "threat", "genocide"];
+    const mediumKeywords = ["abuse", "racist", "sexist", "slur", "hate"];
+
+    if (highKeywords.some((k) => text.includes(k))) {
+      severity = "high";
+      autoFlag = true;
+      reasons.push("kw:high");
+    } else if (!autoFlag && mediumKeywords.some((k) => text.includes(k))) {
+      severity = "medium";
+      autoFlag = true;
+      reasons.push("kw:medium");
+    }
+  }
+
+  return { severity, autoFlag, reasons };
+};
+
 const server = http.createServer(async (req, res) => {
   req._requestMeta = { id: crypto.randomUUID(), startedAt: Date.now() };
   const url = new URL(req.url || "/", `http://${req.headers.host}`);
@@ -703,6 +851,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/health") {
+    await expireStaleQueueEntries();
+
     return sendJson(req, res, 200, {
       ok: true,
       service: "interfaith-api",
@@ -710,6 +860,10 @@ const server = http.createServer(async (req, res) => {
       citationSource: pgClient ? "postgres" : citations.length ? "dataset" : "empty",
       activeSessions: [...dialogueSessions.values()].filter((s) => s.state !== "ended").length,
       queueDepth: queueByUser.size,
+      queue: {
+        depth: queueByUser.size,
+        ttlMs: QUEUE_TTL_MS
+      },
       timestamp: new Date().toISOString()
     });
   }
@@ -745,11 +899,78 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "POST" && url.pathname === "/auth/signup") {
-    return sendJson(req, res, 200, {
-      ok: true,
-      next: "verify-email",
-      message: "Signup stub ready"
-    });
+    const body = await readBody(req);
+    const email = (body.email || "").toString().trim();
+    const password = (body.password || "").toString();
+    const displayName = (body.displayName || "").toString().trim();
+
+    // If no email/password provided, keep previous stub behaviour for dev flows.
+    if (!email || !password) {
+      return sendJson(req, res, 200, {
+        ok: true,
+        next: "verify-email",
+        message: "Signup stub ready (email/password not provided)"
+      });
+    }
+
+    if (!pgClient) {
+      return sendJson(req, res, 503, {
+        ok: false,
+        error: "User signup requires Postgres backing store"
+      });
+    }
+
+    if (password.length < 8) {
+      return sendJson(req, res, 400, {
+        ok: false,
+        error: "Password must be at least 8 characters"
+      });
+    }
+
+    try {
+      const existing = await findUserByEmail(email);
+      if (existing) {
+        return sendJson(req, res, 409, {
+          ok: false,
+          error: "User already exists for this email"
+        });
+      }
+
+      const passwordHash = hashPassword(password);
+      const userId = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+
+      const { rows } = await pgClient.query(
+        `insert into users(id, email, display_name, password_hash, created_at)
+         values($1,$2,$3,$4,$5)
+         returning id, email, display_name, created_at`,
+        [userId, email, displayName || email, passwordHash, createdAt]
+      );
+
+      const user = rows[0];
+      const token = crypto.randomUUID();
+      await storeAuthSession({ token, userId: user.id, createdAt });
+
+      return sendJson(
+        req,
+        res,
+        201,
+        {
+          ok: true,
+          userId: user.id,
+          email: user.email,
+          displayName: user.display_name,
+          sessionToken: token
+        },
+        { "Set-Cookie": cookieSessionValue(token) }
+      );
+    } catch (error) {
+      console.warn("[api] /auth/signup failed", error.message);
+      return sendJson(req, res, 500, {
+        ok: false,
+        error: "Signup failed"
+      });
+    }
   }
 
   if (req.method === "POST" && url.pathname === "/auth/login") {
@@ -759,6 +980,46 @@ const server = http.createServer(async (req, res) => {
     }
 
     const body = await readBody(req);
+    const email = (body.email || "").toString().trim();
+    const password = (body.password || "").toString();
+
+    // If email + password provided, attempt real credential-based login.
+    if (email && password) {
+      if (!pgClient) {
+        return sendJson(req, res, 503, {
+          ok: false,
+          error: "User login requires Postgres backing store"
+        });
+      }
+
+      const user = await findUserByEmail(email);
+      if (!user || !verifyPassword(password, user.passwordHash)) {
+        return sendJson(req, res, 401, {
+          ok: false,
+          error: "Invalid email or password"
+        });
+      }
+
+      const token = crypto.randomUUID();
+      const createdAt = new Date().toISOString();
+      await storeAuthSession({ token, userId: user.id, createdAt });
+
+      return sendJson(
+        req,
+        res,
+        200,
+        {
+          ok: true,
+          userId: user.id,
+          email: user.email,
+          displayName: user.displayName,
+          sessionToken: token
+        },
+        { "Set-Cookie": cookieSessionValue(token) }
+      );
+    }
+
+    // Fallback: keep existing stub userId-based login for dev/local flows.
     const userId = (body.userId || "demo-user").toString();
     const token = crypto.randomUUID();
     const createdAt = new Date().toISOString();
@@ -783,7 +1044,23 @@ const server = http.createServer(async (req, res) => {
     }
 
     req._authUserId = session.userId;
-    return sendJson(req, res, 200, { ok: true, userId: session.userId, sessionCreatedAt: session.createdAt });
+
+    const profile = await getUserProfileById(session.userId);
+    if (!profile) {
+      return sendJson(req, res, 200, {
+        ok: true,
+        userId: session.userId,
+        sessionCreatedAt: session.createdAt
+      });
+    }
+
+    return sendJson(req, res, 200, {
+      ok: true,
+      userId: profile.id,
+      email: profile.email,
+      displayName: profile.displayName,
+      sessionCreatedAt: profile.createdAt || session.createdAt
+    });
   }
 
   if (req.method === "POST" && url.pathname === "/queue/join") {
@@ -791,6 +1068,8 @@ const server = http.createServer(async (req, res) => {
     if (!rl.allowed) {
       return sendJson(req, res, 429, { ok: false, error: "Rate limit exceeded", retryAfterSec: rl.retryAfterSec });
     }
+
+    await expireStaleQueueEntries();
 
     const body = await readBody(req);
     const userId = (body.userId || "demo-user").toString();
@@ -851,6 +1130,8 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.method === "GET" && url.pathname === "/queue/status") {
+    await expireStaleQueueEntries();
+
     const userId = (url.searchParams.get("userId") || "demo-user").toString();
     const activeSession = findSessionByUser(userId);
 
@@ -955,17 +1236,23 @@ const server = http.createServer(async (req, res) => {
     }
 
     const body = await readBody(req);
+    const baseCategory = body.category || "other";
+    const baseNotes = body.notes || "";
+    const heuristics = computeModerationHeuristics({ category: baseCategory, notes: baseNotes });
+
     const report = {
       id: crypto.randomUUID(),
       sessionId: body.sessionId || null,
       reporterUserId: (body.reporterUserId || "demo-user").toString(),
       targetUserId: body.targetUserId || null,
-      category: body.category || "other",
-      notes: body.notes || "",
+      category: baseCategory,
+      notes: baseNotes,
       status: "new",
       reviewerNote: null,
       reviewedBy: null,
       reviewedAt: null,
+      autoFlag: Boolean(heuristics.autoFlag),
+      severity: heuristics.severity || "low",
       createdAt: new Date().toISOString()
     };
 
@@ -973,8 +1260,8 @@ const server = http.createServer(async (req, res) => {
 
     if (pgClient) {
       await pgClient.query(
-        `insert into moderation_reports(id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at)
-         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+        `insert into moderation_reports(id, session_id, reporter_user_id, target_user_id, category, notes, status, reviewer_note, reviewed_by, reviewed_at, created_at, auto_flag, severity)
+         values($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
         [
           report.id,
           report.sessionId,
@@ -986,7 +1273,9 @@ const server = http.createServer(async (req, res) => {
           report.reviewerNote,
           report.reviewedBy,
           report.reviewedAt,
-          report.createdAt
+          report.createdAt,
+          report.autoFlag,
+          report.severity
         ]
       );
       await addReportEvent({

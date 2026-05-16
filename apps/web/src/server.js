@@ -26,7 +26,7 @@ const html = `<!doctype html>
     <p class="muted">API target: <code>${apiUrl}</code></p>
 
     <div class="card">
-      <h3>Auth (stub)</h3>
+      <h3>Auth</h3>
       <p id="adminBadge" class="muted">Admin status: unknown</p>
       <div class="row">
         <div>
@@ -36,6 +36,22 @@ const html = `<!doctype html>
         <div style="align-self:flex-end;">
           <button onclick="login()">Login</button>
           <button onclick="me()">Who am I?</button>
+        </div>
+      </div>
+      <hr style="border:none;border-top:1px solid #eee; margin:.75rem 0;" />
+      <p class="muted">Email auth (optional; uses real users when Postgres is enabled).</p>
+      <div class="row">
+        <div>
+          <label>Email</label>
+          <input id="email" type="email" placeholder="you@example.com" />
+        </div>
+        <div>
+          <label>Password</label>
+          <input id="password" type="password" />
+        </div>
+        <div style="align-self:flex-end;">
+          <button onclick="signupEmail()">Sign up (email)</button>
+          <button onclick="loginEmail()">Login (email)</button>
         </div>
       </div>
       <pre id="authOut" class="result">Not logged in.</pre>
@@ -236,6 +252,16 @@ const html = `<!doctype html>
         return document.getElementById('userId').value.trim() || 'demo-user';
       }
 
+      function currentEmail() {
+        const el = document.getElementById('email');
+        return el ? el.value.trim() : '';
+      }
+
+      function currentPassword() {
+        const el = document.getElementById('password');
+        return el ? el.value : '';
+      }
+
       const ADMIN_IDS = new Set(['demo-admin', 'ops']);
       let reportsById = new Map();
 
@@ -275,6 +301,21 @@ const html = `<!doctype html>
       function statusChip(status) {
         const s = (status || 'new').toLowerCase();
         return '<span style="display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:.78rem;font-weight:600;color:#fff;background:' + statusColor(s) + ';">' + escapeHtml(s) + '</span>';
+      }
+
+      function severityColor(severity) {
+        switch ((severity || '').toLowerCase()) {
+          case 'high': return '#dc2626';
+          case 'medium': return '#d97706';
+          case 'low': return '#4b5563';
+          default: return '#6b7280';
+        }
+      }
+
+      function severityChip(severity, autoFlag) {
+        const s = (severity || 'low').toLowerCase();
+        const label = autoFlag ? (s + ' · auto-flag') : s;
+        return '<span style="display:inline-block;padding:.1rem .45rem;border-radius:999px;font-size:.78rem;font-weight:600;color:#fff;background:' + severityColor(s) + ';margin-left:.35rem;">' + escapeHtml(label) + '</span>';
       }
 
       function eventTypeLabel(eventType) {
@@ -351,6 +392,36 @@ const html = `<!doctype html>
       async function login() {
         const data = await jfetch('/auth/login', { method: 'POST', body: JSON.stringify({ userId: currentUserId() }) });
         document.getElementById('authOut').textContent = JSON.stringify(data, null, 2);
+        await refreshAdminBadge();
+      }
+
+      async function signupEmail() {
+        const email = currentEmail();
+        const password = currentPassword();
+        const out = document.getElementById('authOut');
+
+        if (!email || !password) {
+          out.textContent = 'Enter email and password first.';
+          return;
+        }
+
+        const data = await jfetch('/auth/signup', { method: 'POST', body: JSON.stringify({ email, password }) });
+        out.textContent = JSON.stringify(data, null, 2);
+        await refreshAdminBadge();
+      }
+
+      async function loginEmail() {
+        const email = currentEmail();
+        const password = currentPassword();
+        const out = document.getElementById('authOut');
+
+        if (!email || !password) {
+          out.textContent = 'Enter email and password first.';
+          return;
+        }
+
+        const data = await jfetch('/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) });
+        out.textContent = JSON.stringify(data, null, 2);
         await refreshAdminBadge();
       }
 
@@ -433,7 +504,7 @@ const html = `<!doctype html>
 
         document.getElementById('reportsOut').innerHTML = data.reports
           .map((r) => '<div style="margin-bottom:.75rem;">'
-            + '<strong>' + escapeHtml(r.id) + '</strong> ' + statusChip(r.status || 'new')
+            + '<strong>' + escapeHtml(r.id) + '</strong> ' + statusChip(r.status || 'new') + (r.autoFlag ? severityChip(r.severity || 'high', true) : '')
             + '<br/>' + escapeHtml(r.category || '') + ' · ' + escapeHtml(r.reporterUserId || '')
             + '<br/><span class="muted">' + escapeHtml(r.notes || '') + '</span>'
             + '<br/><button data-report-id="' + escapeHtml(r.id) + '" onclick="loadReportDetail(this.dataset.reportId)" style="margin-top:.35rem;">View timeline</button>'
@@ -482,6 +553,9 @@ const html = `<!doctype html>
           ? '<div><strong>' + escapeHtml(summary.id) + '</strong> ' + statusChip(summary.status || 'new')
             + '<br/><span class="muted">Category: ' + escapeHtml(summary.category || 'other') + ' · Reporter: ' + escapeHtml(summary.reporterUserId || 'unknown') + '</span>'
             + '<br/><span class="muted">Last review: ' + escapeHtml(summary.reviewedBy || 'n/a') + ' @ ' + escapeHtml(fmtDate(summary.reviewedAt)) + '</span>'
+            + (summary.autoFlag
+              ? '<br/><span class="muted">Heuristics: ' + severityChip(summary.severity || 'high', true) + '</span>'
+              : '')
             + (summary.reviewerNote ? '<br/><span class="muted">Reviewer note: ' + escapeHtml(summary.reviewerNote) + '</span>' : '')
             + '</div>'
           : '<div><strong>' + escapeHtml(reportId) + '</strong></div>';

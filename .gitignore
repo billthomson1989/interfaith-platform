@@ -1,0 +1,21 @@
+.openclaw/
+node_modules/
+tmp/
+*.log
+browser_status.txt
+
+# Local assistant workspace files
+AGENTS.md
+BOOTSTRAP.md
+HEARTBEAT.md
+IDENTITY.md
+SOUL.md
+TOOLS.md
+USER.md
+memory/
+
+# Generated deploy/media artifacts
+*.zip
+assets/raw-clips/
+assets/edited/
+assets/upload-queue/

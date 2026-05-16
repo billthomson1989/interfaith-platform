@@ -9,6 +9,11 @@ const PORT = process.env.PORT || 8787;
 const BASE = '/api';
 const isProd = (process.env.NODE_ENV || 'development') === 'production';
 const startedAt = new Date().toISOString();
+const QUEUE_TTL_MS = (() => {
+  const raw = Number(process.env.QUEUE_TTL_MS || '');
+  if (Number.isFinite(raw) && raw > 0) return raw;
+  return 5 * 60_000; // default: 5 minutes
+})();
 
 const loadBuildMeta = () => {
   try {
@@ -109,6 +114,40 @@ const citations = [
   { id: 'leviticus-19-18-jps', tradition: 'judaism', reference: 'Leviticus 19:18', canonical_key: 'LEVITICUS 19:18', text: 'You shall love your neighbor as yourself.', translation: 'JPS', source: 'Tanakh', language: 'en', tags: ['ethics', 'neighbor', 'community'] }
 ];
 
+function computeModerationHeuristics(category, notes) {
+  const cat = String(category || '').toLowerCase().trim();
+  const text = String(notes || '').toLowerCase();
+
+  let severity = 'low';
+  let autoFlag = false;
+
+  const highCategories = new Set(['hate', 'harassment', 'sexual-content']);
+  const mediumCategories = new Set(['misinformation']);
+
+  if (highCategories.has(cat)) {
+    severity = 'high';
+    autoFlag = true;
+  } else if (mediumCategories.has(cat)) {
+    severity = 'medium';
+    autoFlag = true;
+  }
+
+  if (text) {
+    const highKeywords = ['kill', 'murder', 'violence', 'threat', 'genocide'];
+    const mediumKeywords = ['abuse', 'racist', 'sexist', 'slur', 'hate'];
+
+    if (highKeywords.some((k) => text.includes(k))) {
+      severity = 'high';
+      autoFlag = true;
+    } else if (!autoFlag && mediumKeywords.some((k) => text.includes(k))) {
+      severity = 'medium';
+      autoFlag = true;
+    }
+  }
+
+  return { severity, autoFlag };
+}
+
 const route = (path) => [path, BASE + path];
 
 const parseCookies = (req) => {
@@ -201,6 +240,16 @@ function canMatch(a, b) {
   return sameLanguage && Boolean(resolveMatchedMode(a.mode, b.mode));
 }
 
+function expireStaleQueueEntries() {
+  const now = Date.now();
+  for (const [userId, entry] of queueByUser.entries()) {
+    const ts = new Date(entry.queuedAt).getTime();
+    if (!Number.isFinite(ts) || now - ts > QUEUE_TTL_MS) {
+      queueByUser.delete(userId);
+    }
+  }
+}
+
 function tryMatchForUser(newEntry) {
   const candidate = [...queueByUser.values()]
     .filter((c) => c.userId !== newEntry.userId)
@@ -236,6 +285,8 @@ function findSessionByUser(userId) {
 }
 
 app.get(route('/health'), (_req, res) => {
+  expireStaleQueueEntries();
+
   res.json({
     ok: true,
     service: 'interfaith-api',
@@ -243,6 +294,10 @@ app.get(route('/health'), (_req, res) => {
     citationSource: 'dataset',
     activeSessions: [...dialogueSessions.values()].filter((s) => s.state !== 'ended').length,
     queueDepth: queueByUser.size,
+    queue: {
+      depth: queueByUser.size,
+      ttlMs: QUEUE_TTL_MS
+    },
     ts: new Date().toISOString()
   });
 });
@@ -301,6 +356,8 @@ app.post(route('/queue/join'), (req, res) => {
   const rl = checkRateLimit({ key: `queue_join:${getClientIp(req)}`, limit: 30, windowMs: 60_000 });
   if (!rl.allowed) return res.status(429).json({ ok: false, error: 'Rate limit exceeded', retryAfterSec: rl.retryAfterSec });
 
+  expireStaleQueueEntries();
+
   const body = req.body || {};
   const userId = String(body.userId || 'demo-user');
 
@@ -325,6 +382,8 @@ app.post(route('/queue/join'), (req, res) => {
 });
 
 app.get(route('/queue/status'), (req, res) => {
+  expireStaleQueueEntries();
+
   const userId = String(req.query.userId || 'demo-user');
   const activeSession = findSessionByUser(userId);
 
@@ -374,16 +433,22 @@ app.post(route('/reports'), (req, res) => {
   if (!rl.allowed) return res.status(429).json({ ok: false, error: 'Rate limit exceeded', retryAfterSec: rl.retryAfterSec });
 
   const body = req.body || {};
+  const baseCategory = body.category || 'other';
+  const baseNotes = body.notes || '';
+  const heuristics = computeModerationHeuristics(baseCategory, baseNotes);
+
   const report = {
     id: crypto.randomUUID(),
     reporterUserId: body.reporterUserId || 'demo-user',
     targetUserId: body.targetUserId || null,
-    category: body.category || 'other',
-    notes: body.notes || '',
+    category: baseCategory,
+    notes: baseNotes,
     status: 'new',
     reviewerNote: null,
     reviewedBy: null,
     reviewedAt: null,
+    autoFlag: heuristics.autoFlag,
+    severity: heuristics.severity,
     createdAt: new Date().toISOString()
   };
   reports.push(report);

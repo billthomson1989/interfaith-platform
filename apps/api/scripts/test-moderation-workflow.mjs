@@ -51,6 +51,19 @@ async function main() {
     const created = await createdRes.json();
     assert.equal(createdRes.status, 201);
     assert.equal(created.report.status, "new");
+    assert.equal(created.report.autoFlag, false);
+    assert.equal(created.report.severity, "low");
+
+    const highRes = await fetch(`${API_BASE_URL}/reports`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reporterUserId: "mod-user", category: "hate", notes: "explicit racist slur and violence" })
+    });
+    const high = await highRes.json();
+    assert.equal(highRes.status, 201);
+    assert.equal(high.report.status, "new");
+    assert.equal(high.report.autoFlag, true);
+    assert.equal(high.report.severity, "high");
 
     const updateRes = await fetch(`${API_BASE_URL}/reports/status`, {
       method: "POST",
