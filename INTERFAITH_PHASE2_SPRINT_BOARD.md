@@ -1,172 +1,140 @@
 # Interfaith Platform — Phase 2 Sprint Board
 
-Last updated: 2026-03-10
-Scope: convert remaining work into executable slices with clear order.
+Last updated: 2026-04-11
+Scope: document Phase 2 slices that shipped, and call out the remaining follow-ups.
 
-## Sprint structure
-- **Sprint 2A:** Real citations + schema normalization
-- **Sprint 2B:** Queue/session lifecycle (matching foundation)
-- **Sprint 2C:** Auth/session hardening
-- **Sprint 2D:** Moderation workflow + observability cleanup
+Phase 2 was originally planned as four sprints (2A–2D). The **core of all four has now been implemented and deployed**; what remains are hardening and follow-up tasks.
+
+For detailed status, see also: `INTERFAITH_COMPLETED_VS_REMAINING.md`.
 
 ---
 
-## Sprint 2A — Real citation data (target: 2–3 days)
+## Sprint 2A — Real citation data (DONE)
 
-### Outcomes
-- `/citation/search` returns real records (not mock array)
-- Frontend renders stable citation labels from normalized fields
+### Outcomes (shipped)
+- `/citation/search` returns real records from:
+  - a curated JSON dataset, and
+  - a Postgres `citations` table when `USE_POSTGRES=true`.
+- Frontend renders stable citation labels from normalized fields.
 
-### Tasks
-1. **Define citation schema**
-   - Fields: `id`, `tradition`, `reference`, `canonical_key`, `text`, `translation`, `source`, `language`, `tags`
-   - Output contract for API response finalized
+### What shipped
+- Citation schema: `id`, `tradition`, `reference`, `canonical_key`, `text`, `translation`, `source`, `language`, `tags`.
+- JSON dataset: `apps/api/src/data/citations.json`.
+- Postgres table `citations` auto-created and seeded from JSON when empty.
+- API handler replaced with real query logic:
+  - Postgres-backed search with `q`, `tradition`, `language`, `limit`.
+  - In-memory fallback using the JSON dataset.
+- Frontend mapping uses `reference` with fallbacks and avoids placeholder labels.
+- Smoke/e2e tests assert that citation results are non-placeholder and non-`undefined`.
 
-2. **Add storage and seed path**
-   - Option A: Postgres table + seed script
-   - Option B: curated JSON dataset + loader (short-term)
-
-3. **Replace mock handler**
-   - Update `GET /citation/search` to query real data source
-   - Add filtering for `q` and `tradition`
-
-4. **Frontend field mapping update**
-   - Render `reference` first
-   - Fallback chain only as safety (`canonical_key`, then "Citation")
-
-5. **Tests**
-   - Add API test for citation query
-   - Extend smoke test to assert non-placeholder citation metadata
-
-### Files
-- `apps/api/src/server.js`
-- `apps/web/src/server.js`
-- `apps/web/scripts/smoke-e2e.mjs`
-- `infrastructure/env.example`
-- new: `apps/api/src/data/citations.*` or DB migration + seed
-
-### Exit criteria
-- `GET /citation/search` no longer depends on in-memory `sampleCitations`
-- UI no longer shows generic fallback labels in normal case
+### Remaining follow-ups
+- None specific to citations; further work is tracked under global ops/auth priorities.
 
 ---
 
-## Sprint 2B — Queue/session lifecycle (target: 3–4 days)
+## Sprint 2B — Queue/session lifecycle (core DONE)
 
-### Outcomes
-- Queue transitions into actual matched sessions
-- Session states tracked and queryable
+### Outcomes (shipped)
+- Queue transitions into actual matched sessions.
+- Session states tracked and queryable via API + UI.
 
-### Tasks
-1. **Session model design**
-   - States: `queued`, `matched`, `active`, `ended`, `expired`
-   - Session fields: participants, mode, created/matched/ended timestamps
+### What shipped
+- Session model with `active` and `ended` states stored in Postgres (`dialogue_sessions`).
+- Persistent queue entries in `queue_entries`.
+- Deterministic matcher on `/queue/join`:
+  - language match
+  - compatible modes (`voice_only`, `voice_then_video`).
+- Session endpoints:
+  - `GET /session/status`
+  - `POST /session/end`.
+- Frontend wiring for join/leave/status/end.
+- Smoke test flow:
+  - user1 joins queue (queued, not matched)
+  - user2 joins queue (matched -> active session)
+  - verify both users see an active session
+  - end the session and verify `ended`/inactive state.
 
-2. **Matcher implementation**
-   - Basic deterministic matcher (same language + compatible mode)
-   - Queue timeout handling
-
-3. **Endpoints**
-   - Keep existing queue endpoints
-   - Add `GET /session/status?userId=...`
-   - Add `POST /session/end`
-
-4. **Persistence**
-   - In-memory first + Postgres path for sessions
-
-5. **Tests**
-   - API flow test: join two users -> matched -> active -> end
-
-### Files
-- `apps/api/src/server.js` (or split service modules)
-- new: `apps/api/src/matcher/*`
-- new: DB migration for sessions
-
-### Exit criteria
-- At least one end-to-end match flow works without manual intervention
+### Remaining follow-ups
+- Add explicit **queue entry expiry** rules and surface basic matcher/queue metrics.
+- Optionally extract matcher logic into its own module to ease future Redis/worker migration.
 
 ---
 
-## Sprint 2C — Auth/session hardening (target: 2–3 days)
+## Sprint 2C — Auth/session hardening (core DONE; identity still TODO)
 
-### Outcomes
-- Session/auth survives API restarts
-- Basic abuse controls in place
+### Outcomes (shipped)
+- Session/auth survives API restarts via Postgres-backed `auth_sessions`.
+- Cookie/session policy is environment-aware.
+- Basic abuse controls (rate limiting) are in place on critical endpoints.
 
-### Tasks
-1. **User/session persistence**
-   - Store sessions in DB or durable store (not only Map)
+### What shipped
+- `auth_sessions` Postgres table with token + user id + timestamps.
+- `interfaith_session` cookie with `HttpOnly`, `SameSite=Lax`, `Secure` in production, and 24h lifetime.
+- `GET /me` endpoint backed by cookie + DB lookup.
+- Rate limiting around:
+  - `/auth/login`
+  - `/queue/join`
+  - `/queue/leave`
+  - `/reports`.
 
-2. **Cookie/session policy**
-   - Environment-safe cookie flags for prod (`Secure`, `SameSite`, expiration)
-
-3. **Rate limiting**
-   - Apply on `/auth/login`, `/reports`, and queue writes
-
-4. **Auth contract cleanup**
-   - Normalize auth response fields and error payloads
-
-5. **Tests**
-   - Session restore and unauthenticated access tests
-
-### Files
-- `apps/api/src/server.js`
-- `infrastructure/env.example`
-- new: `apps/api/src/auth/*`
-
-### Exit criteria
-- Restart does not invalidate all active sessions unexpectedly
-- Auth endpoints rate-limited and deterministic
+### Remaining follow-ups
+- Keep the new `users` table and scrypt-based email/password auth path documented and tested.
+- Gate the userId-based stub login to local/dev only.
+- Extend docs and env configuration to describe the auth model.
 
 ---
 
-## Sprint 2D — Moderation workflow + ops cleanup (target: 2–3 days)
+## Sprint 2D — Moderation workflow + ops cleanup (core DONE; heuristics TODO)
 
-### Outcomes
-- Reports become triage-able workflow items
-- Better production safety and diagnostics
+### Outcomes (shipped)
+- Reports are triage-able workflow items.
+- There is a basic moderation admin surface.
+- Production safety and diagnostics are significantly better than Phase 1.
 
-### Tasks
-1. **Moderation workflow states**
-   - `new`, `triaged`, `actioned`, `resolved`
+### What shipped
+- `moderation_reports` table with status fields (`status`, `reviewer_note`, `reviewed_by`, `reviewed_at`).
+- `report_events` table to track timeline of changes.
+- API endpoints:
+  - `POST /reports` (ingest reports)
+  - `GET /reports` (list/filter)
+  - `GET /reports/:id/history` (timeline)
+  - `POST /reports/status` (moderation updates).
+- Frontend admin UI:
+  - list view with status chips
+  - detail timeline with history events
+  - inline status + reviewer note updates.
+- Structured JSON logging with request IDs.
+- `/health`, `/ready`, `/version` endpoints and a diagnostics panel in the UI.
+- Deploy/restart checklist with smoke tests and rollback notes.
 
-2. **Admin review endpoints**
-   - List/filter by status
-   - Update status with reviewer note
-
-3. **Structured logging**
-   - Request id, route, status, latency
-
-4. **Operational hardening**
-   - Tighten CORS to known origins
-   - Expand health/readiness checks
-   - Remove temporary DNS fallback once confirmed stable
-
-5. **Tests + runbook**
-   - Add moderation API checks
-   - Add rollback/redeploy notes in docs
-
-### Files
-- `apps/api/src/server.js`
-- `apps/web/src/server.js`
-- `infrastructure/env.example`
-- new docs: `docs/interfaith-ops-runbook.md`
-
-### Exit criteria
-- Moderation items track lifecycle state
-- Production config no longer relies on temporary network fallback
+### Remaining follow-ups
+- Keep the new **auto-flag heuristics** tuned and documented:
+  - `severity`/`autoFlag` are now derived from category + notes using simple rules.
+  - they are surfaced in the admin UI as hints, not automatic actions.
+- Tighten production `CORS_ORIGINS` and confirm DNS fallback paths are fully removed.
+- Add a small `interfaith-ops-runbook` doc summarizing restarts, logs, smoke tests, and rollback.
 
 ---
 
-## Cross-sprint guardrails
-- Keep current endpoints backward compatible where possible.
+## Cross-sprint guardrails (still valid)
+
+- Keep public API contracts backward compatible where possible.
 - Ship in small merges; run smoke e2e before each deploy.
-- Avoid large refactors and feature additions in same commit.
-- Record each sprint outcome in `memory/YYYY-MM-DD.md` + update `MEMORY.md` for durable continuity.
+- Avoid large refactors and feature additions in the same commit.
+- Record major outcomes in `memory/YYYY-MM-DD.md` and update `MEMORY.md` for durable continuity.
 
 ---
 
-## Immediate next action (start now)
-1. Implement Sprint 2A task #1–#3 in a single PR:
-   - schema + real citation storage + `/citation/search` replacement
-2. Then patch frontend mapping and smoke assertions.
+## Immediate next actions (as of 2026-04-11)
+
+1. **Auth/identity cleanup (Sprint 2C follow-up)**
+   - Gate the current userId-based login to dev-only.
+   - Document and test the new email/password auth path.
+
+2. **Queue/matcher robustness (Sprint 2B follow-up)**
+   - Validate queue entry expiry behavior and, if useful, expose expired counts in `/health`.
+
+3. **Moderation heuristics tuning (Sprint 2D follow-up)**
+   - Tune keyword/category rules and document expected behavior.
+
+These three together close out the remaining Phase 2 work described in `INTERFAITH_COMPLETED_VS_REMAINING.md`. After that, we can spin up a Phase 3 doc focused on richer product features (dialogue UX, facilitator tools, additional traditions, etc.).
